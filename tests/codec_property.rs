@@ -5,7 +5,7 @@
 //! 1. **Round trip** — for arbitrary content, encode → decode reproduces every
 //!    changed cell exactly and the sender's reference equals the decoded canvas.
 //! 2. **INV-R** — a deterministic simulator runs scripted content through the
-//!    encoder, the chunker, a lossy transport, and the receiver state machine;
+//!    encoder, the splitter, a lossy transport, and the receiver state machine;
 //!    after every applied frame the canvas equals the sender's reference for that
 //!    frame id, and every loss heals within four frames.
 //! 3. **Rebase** — encoding against a reported base paints the same cells as a
@@ -36,10 +36,10 @@ use proptest::collection::vec;
 use proptest::prelude::*;
 use tessellio_core::CapturedFrame;
 use tessellio_core::{
-    AssemblyOutcome, CodecConfig, Coverage, DecodeError, MAX_CHUNKS_PER_UPDATE,
-    MAX_REGION_WIRE_BYTES, MAX_REGIONS_PER_CHUNK, MAX_REGIONS_PER_UPDATE, MAX_UPDATE_WIRE_BYTES,
-    ResetReason, ResyncReason, ScreenStreamEncoder, SurfaceCanvas, UpdateAssembler, UpdateChunker,
-    decode_region_ops, deflate_ops, validate_chunk, validate_region_ops,
+    AssemblyOutcome, CodecConfig, Coverage, DecodeError, MAX_PARTS_PER_UPDATE,
+    MAX_REGION_WIRE_BYTES, MAX_REGIONS_PER_PART, MAX_REGIONS_PER_UPDATE, MAX_UPDATE_WIRE_BYTES,
+    ResetReason, ResyncReason, ScreenStreamEncoder, SurfaceCanvas, UpdateAssembler, UpdateSplitter,
+    decode_region_ops, deflate_ops, validate_part, validate_region_ops,
 };
 
 /// A processed frame from raw RGBA bytes.
@@ -94,7 +94,7 @@ proptest! {
         let base_frame = frame_from_565(width, height, &base);
         let reset = encode_frame(&mut encoder, &base_frame, 1);
         prop_assert_eq!(reset.update_base, 0);
-        canvas.apply(&reset).expect("reset applies");
+        canvas.apply(&reset).expect("self-contained applies");
         prop_assert_eq!(canvas.cells(), encoder.reference_pixels());
         prop_assert_eq!(canvas.cells(), expect565(&base_frame));
 
@@ -106,7 +106,7 @@ proptest! {
             let planned = encoder.encode(&frame).expect("encode");
             let Some(planned) = planned else { continue };
             let encoded = encoder.commit(planned, index as u64 + 2);
-            canvas.apply(&encoded).expect("delta applies");
+            canvas.apply(&encoded).expect("chained applies");
             // Every cell the frame carried is a changed cell, and the decoded
             // canvas matches the source at wire fidelity.
             prop_assert!(encoded.sent_pixels <= encoded.changed_pixels.max(encoded.sent_pixels));
@@ -219,12 +219,12 @@ proptest! {
         let planned = encoder.encode(&second_frame).expect("encode");
         if let Some(planned) = planned {
             let encoded = encoder.commit(planned, 2);
-            let chunks = UpdateChunker::new().chunk(encoded.clone()).expect("chunks");
-            prop_assert!(chunks.len() <= MAX_CHUNKS_PER_UPDATE);
+            let parts = UpdateSplitter::new().part(encoded.clone()).expect("parts");
+            prop_assert!(parts.len() <= MAX_PARTS_PER_UPDATE);
             prop_assert!(encoded.regions.len() <= MAX_REGIONS_PER_UPDATE);
-            for chunk in &chunks {
-                prop_assert_eq!(validate_chunk(chunk), Ok(()));
-                prop_assert!(chunk.regions.len() <= MAX_REGIONS_PER_CHUNK);
+            for part in &parts {
+                prop_assert_eq!(validate_part(part), Ok(()));
+                prop_assert!(part.regions.len() <= MAX_REGIONS_PER_PART);
             }
             let total: usize = encoded.regions.iter().map(|region| region.payload.len()).sum();
             prop_assert!(total <= MAX_UPDATE_WIRE_BYTES);
@@ -247,7 +247,7 @@ proptest! {
         let first = frame_from_565(width, height, &base);
         let reset = encode_frame(&mut encoder, &first, 1);
         let mut canvas = SurfaceCanvas::new();
-        canvas.apply(&reset).expect("reset applies");
+        canvas.apply(&reset).expect("self-contained applies");
 
         let mut second = noise;
         second.resize((width * height) as usize, 0);
@@ -257,9 +257,9 @@ proptest! {
             let encoded = encoder.commit(planned, 2);
             prop_assert!(encoded.sent_pixels <= 4096 + u64::from(width));
             prop_assert_eq!(encoded.sent_pixels + encoded.backlog_pixels, encoded.changed_pixels);
-            let chunks = UpdateChunker::new().chunk(encoded.clone()).expect("chunks");
-            for chunk in &chunks {
-                prop_assert_eq!(validate_chunk(chunk), Ok(()));
+            let parts = UpdateSplitter::new().part(encoded.clone()).expect("parts");
+            for part in &parts {
+                prop_assert_eq!(validate_part(part), Ok(()));
             }
             canvas.apply(&encoded).expect("applies");
         }
@@ -286,8 +286,8 @@ proptest! {
 enum Loss {
     /// The whole frame is dropped.
     Frame,
-    /// One chunk of the frame is dropped (the frame never assembles).
-    Chunk,
+    /// One part of the frame is dropped (the frame never assembles).
+    Part,
     /// Nothing is lost.
     None,
 }
@@ -334,7 +334,7 @@ fn inv_r_holds_through_a_lossy_transport() {
         idle_update_interval: std::time::Duration::ZERO,
         ..CodecConfig::default()
     });
-    let chunker = UpdateChunker::new();
+    let splitter = UpdateSplitter::new();
     let mut canvas = SurfaceCanvas::new();
     let mut assembler = UpdateAssembler::new();
     let mut update_id = 0_u64;
@@ -354,7 +354,7 @@ fn inv_r_holds_through_a_lossy_transport() {
                     update_id += 1;
                     let encoded = encoder.commit(planned, update_id);
                     deliver(
-                        &chunker,
+                        &splitter,
                         encoded,
                         Loss::None,
                         &mut assembler,
@@ -378,7 +378,7 @@ fn inv_r_holds_through_a_lossy_transport() {
         } else if step % 7 == 6 {
             Loss::Frame
         } else if is_reset && step % 3 == 1 {
-            Loss::Chunk
+            Loss::Part
         } else if step % 5 == 4 {
             Loss::Frame
         } else {
@@ -391,7 +391,7 @@ fn inv_r_holds_through_a_lossy_transport() {
             frames_since_loss += 1;
         }
         deliver(
-            &chunker,
+            &splitter,
             encoded,
             loss,
             &mut assembler,
@@ -436,9 +436,9 @@ fn inv_r_holds_through_a_lossy_transport() {
     );
 }
 
-/// Push one frame's chunks through the lossy transport and the receiver.
+/// Push one frame's parts through the lossy transport and the receiver.
 fn deliver(
-    chunker: &UpdateChunker,
+    splitter: &UpdateSplitter,
     encoded: tessellio_core::EncodedUpdate,
     loss: Loss,
     assembler: &mut UpdateAssembler,
@@ -450,14 +450,14 @@ fn deliver(
         // the next frame that applies onto a base it does not hold.
         return;
     }
-    let chunks = chunker.chunk(encoded.clone()).expect("chunks");
-    let mut dropped_chunk = false;
-    for (index, chunk) in chunks.iter().enumerate() {
-        if loss == Loss::Chunk && index == 1 && chunks.len() > 1 {
-            dropped_chunk = true;
+    let parts = splitter.part(encoded.clone()).expect("parts");
+    let mut dropped_part = false;
+    for (index, part) in parts.iter().enumerate() {
+        if loss == Loss::Part && index == 1 && parts.len() > 1 {
+            dropped_part = true;
             continue;
         }
-        match assembler.push(chunk.clone()) {
+        match assembler.push(part.clone()) {
             AssemblyOutcome::Pending => {}
             AssemblyOutcome::Complete(assembled) => {
                 let frame = tessellio_core::EncodedUpdate {
@@ -482,8 +482,8 @@ fn deliver(
             }
             AssemblyOutcome::Rejected(rejection) => {
                 let reason = match rejection.reason_code() {
-                    "INCOMPLETE_FRAME" => ResyncReason::IncompleteFrame,
-                    "CHUNK_GAP" => ResyncReason::ChunkGap,
+                    "INCOMPLETE_UPDATE" => ResyncReason::IncompleteFrame,
+                    "PART_GAP" => ResyncReason::PartGap,
                     "UNKNOWN_CODEC" => ResyncReason::UnknownCodec,
                     "COVERAGE_INVALID" => ResyncReason::CoverageInvalid,
                     _ => ResyncReason::DecodeError,
@@ -493,8 +493,8 @@ fn deliver(
             }
         }
     }
-    if dropped_chunk {
-        resyncs.push(ResyncReason::ChunkGap);
+    if dropped_part {
+        resyncs.push(ResyncReason::PartGap);
         assembler.reset();
     }
 }

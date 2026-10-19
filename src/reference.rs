@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 
 use crate::buffer::Surface;
 use crate::error::CodecError;
-use crate::format::{JOURNAL_MAX_BYTES, JOURNAL_MAX_FRAMES};
+use crate::format::{JOURNAL_MAX_BYTES, JOURNAL_MAX_UPDATES};
 
 /// One contiguous run of cells written (or restored) by a frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,7 +175,7 @@ impl ReferenceJournal {
     /// Drop the oldest entries until the byte and frame ceilings hold.
     fn evict_to_bounds(&mut self) {
         while !self.entries.is_empty()
-            && (self.bytes > JOURNAL_MAX_BYTES || self.entries.len() > JOURNAL_MAX_FRAMES)
+            && (self.bytes > JOURNAL_MAX_BYTES || self.entries.len() > JOURNAL_MAX_UPDATES)
         {
             if let Some(evicted) = self.entries.pop_front() {
                 self.bytes = self.bytes.saturating_sub(evicted.bytes);
@@ -296,11 +296,11 @@ mod tests {
     fn eviction_raises_the_floor_and_keeps_the_chain_reachable() {
         let mut journal = ReferenceJournal::new();
         journal.clear(0);
-        for update_id in 1..=JOURNAL_MAX_FRAMES as u64 + 10 {
+        for update_id in 1..=JOURNAL_MAX_UPDATES as u64 + 10 {
             journal.push(JournalEntry::new(update_id, update_id - 1, Vec::new()));
         }
-        assert_eq!(journal.frames(), JOURNAL_MAX_FRAMES);
-        let reference_id = JOURNAL_MAX_FRAMES as u64 + 10;
+        assert_eq!(journal.frames(), JOURNAL_MAX_UPDATES);
+        let reference_id = JOURNAL_MAX_UPDATES as u64 + 10;
         // Ten frames were evicted: 1..=10, so 10 is the oldest reachable state.
         assert_eq!(journal.floor_update_id(), 10);
         assert!(!journal.can_reach(9, reference_id));

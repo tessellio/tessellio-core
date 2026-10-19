@@ -669,7 +669,7 @@ mod tests {
     #[test]
     fn bounded_decompression_rejects_oversized_op_streams() {
         // A deflate stream of MAX_REGION_OPS_BYTES + 1 zero bytes expands past
-        // the cap without allocating more than the final chunk.
+        // the cap without allocating more than the final part.
         let payload = deflate(&vec![0_u8; MAX_REGION_OPS_BYTES + 1], 0);
         let mut scratch = Vec::new();
         assert_eq!(

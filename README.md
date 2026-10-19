@@ -26,7 +26,7 @@ canvas equals the sender's reference for the update the receiver has applied.
 | `encode` | the stream encoder, the refresh budget, and commit |
 | `reset` | band-parallel self-contained updates |
 | `reference` | the reference surface and its undo journal |
-| `chunk` | update chunking, chunk validation, receiver assembly |
+| `part` | the update's parts: splitting, validation, and assembly |
 | `decode` | the decoder, the bounded op walk, and the surface oracle |
 | `telemetry` | what the codec measures, and how a caller collects it |
 | `error` | the codec's error vocabulary |

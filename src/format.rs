@@ -1,7 +1,7 @@
 //! `tessellio` frame format: codec identity, limits, regions, and reset reasons.
 //!
 //! Every constant in this module is normative for the wire format: the encoder
-//! asserts them, the decoder validates them, and the chunker enforces them, so
+//! asserts them, the decoder validates them, and the splitter enforces them, so
 //! they exist exactly once.
 
 /// Canonical codec wire id (`CODEC_TESSELLIO`).
@@ -15,23 +15,23 @@ pub const MAX_SURFACE_DIMENSION: u32 = 8192;
 pub const MAX_SURFACE_CELLS: u64 = 16_777_216;
 /// Largest region count in one frame.
 pub const MAX_REGIONS_PER_UPDATE: usize = 64;
-/// Largest region count in one chunk.
-pub const MAX_REGIONS_PER_CHUNK: usize = 32;
+/// Largest region count in one part.
+pub const MAX_REGIONS_PER_PART: usize = 32;
 /// Largest compressed payload of one region.
 pub const MAX_REGION_WIRE_BYTES: usize = 262_144;
 /// Largest decompressed op stream of one region (the bounded-decompress cap).
 pub const MAX_REGION_OPS_BYTES: usize = 1_048_576;
-/// Largest payload carried by one chunk.
-pub const MAX_CHUNK_WIRE_BYTES: usize = 491_520;
-/// Largest chunk count of one frame.
-pub const MAX_CHUNKS_PER_UPDATE: usize = 8;
+/// Largest payload carried by one part.
+pub const MAX_PART_WIRE_BYTES: usize = 491_520;
+/// Largest part count of one frame.
+pub const MAX_PARTS_PER_UPDATE: usize = 8;
 /// Largest total payload of one frame.
 pub const MAX_UPDATE_WIRE_BYTES: usize = 3_932_160;
-/// Chunk count a reset frame may fill before the remainder becomes the next
+/// Part count a reset frame may fill before the remainder becomes the next
 /// frame's work (progressive refresh).
-pub const RESET_MAX_CHUNKS: usize = 4;
-/// Payload budget of one reset frame (`RESET_MAX_CHUNKS * MAX_CHUNK_WIRE_BYTES`).
-pub const RESET_PAYLOAD_BUDGET_BYTES: usize = RESET_MAX_CHUNKS * MAX_CHUNK_WIRE_BYTES;
+pub const RESET_MAX_PARTS: usize = 4;
+/// Payload budget of one reset frame (`RESET_MAX_PARTS * MAX_PART_WIRE_BYTES`).
+pub const RESET_PAYLOAD_BUDGET_BYTES: usize = RESET_MAX_PARTS * MAX_PART_WIRE_BYTES;
 /// Default delta changed-cell budget per frame.
 pub const DELTA_REFRESH_CELLS: u32 = 131_072;
 /// Progress guarantee: a frame whose budget is exhausted still carries this many
@@ -46,7 +46,7 @@ pub const FILL_MIN_RUN: u32 = 8;
 /// Journal byte ceiling.
 pub const JOURNAL_MAX_BYTES: usize = 8 * 1024 * 1024;
 /// Journal frame ceiling.
-pub const JOURNAL_MAX_FRAMES: usize = 240;
+pub const JOURNAL_MAX_UPDATES: usize = 240;
 /// Idle frame interval for an unchanged desktop.
 pub const IDLE_UPDATE_INTERVAL_MS: u64 = 1_000;
 /// Receiver resync rate limit.
@@ -102,8 +102,8 @@ impl UpdateKind {
     /// Metric label value.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Reset => "reset",
-            Self::Delta => "delta",
+            Self::Reset => "self-contained",
+            Self::Delta => "chained",
             Self::Empty => "empty",
         }
     }
@@ -209,7 +209,7 @@ impl ResetReasons {
 pub enum ResyncReason {
     /// The frame applies onto a base the receiver does not hold.
     BaseMismatch,
-    /// Not every chunk of the frame arrived.
+    /// Not every part of the frame arrived.
     IncompleteFrame,
     /// A region payload could not be decoded.
     DecodeError,
@@ -221,8 +221,8 @@ pub enum ResyncReason {
     QueueOverflow,
     /// A delta's geometry differs from the canvas.
     GeometryMismatch,
-    /// A chunk gap was detected before assembly.
-    ChunkGap,
+    /// A part gap was detected before assembly.
+    PartGap,
 }
 
 impl ResyncReason {
@@ -235,20 +235,20 @@ impl ResyncReason {
         Self::UnknownCodec,
         Self::QueueOverflow,
         Self::GeometryMismatch,
-        Self::ChunkGap,
+        Self::PartGap,
     ];
 
     /// Metric label value (and the string the receiver sends).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::BaseMismatch => "BASE_MISMATCH",
-            Self::IncompleteFrame => "INCOMPLETE_FRAME",
+            Self::IncompleteFrame => "INCOMPLETE_UPDATE",
             Self::DecodeError => "DECODE_ERROR",
             Self::CoverageInvalid => "COVERAGE_INVALID",
             Self::UnknownCodec => "UNKNOWN_CODEC",
             Self::QueueOverflow => "QUEUE_OVERFLOW",
             Self::GeometryMismatch => "GEOMETRY_MISMATCH",
-            Self::ChunkGap => "CHUNK_GAP",
+            Self::PartGap => "PART_GAP",
         }
     }
 
@@ -262,7 +262,7 @@ impl ResyncReason {
             Self::UnknownCodec => 5,
             Self::QueueOverflow => 6,
             Self::GeometryMismatch => 7,
-            Self::ChunkGap => 8,
+            Self::PartGap => 8,
         }
     }
 
@@ -382,13 +382,13 @@ mod tests {
         assert_eq!(MAX_SURFACE_DIMENSION, 8192);
         assert_eq!(MAX_SURFACE_CELLS, 16_777_216);
         assert_eq!(MAX_REGIONS_PER_UPDATE, 64);
-        assert_eq!(MAX_REGIONS_PER_CHUNK, 32);
+        assert_eq!(MAX_REGIONS_PER_PART, 32);
         assert_eq!(MAX_REGION_WIRE_BYTES, 262_144);
         assert_eq!(MAX_REGION_OPS_BYTES, 1_048_576);
-        assert_eq!(MAX_CHUNK_WIRE_BYTES, 491_520);
-        assert_eq!(MAX_CHUNKS_PER_UPDATE, 8);
+        assert_eq!(MAX_PART_WIRE_BYTES, 491_520);
+        assert_eq!(MAX_PARTS_PER_UPDATE, 8);
         assert_eq!(MAX_UPDATE_WIRE_BYTES, 3_932_160);
-        assert_eq!(RESET_MAX_CHUNKS, 4);
+        assert_eq!(RESET_MAX_PARTS, 4);
         assert_eq!(RESET_PAYLOAD_BUDGET_BYTES, 1_966_080);
         assert_eq!(DELTA_REFRESH_CELLS, 131_072);
         assert_eq!(DELTA_REFRESH_MIN_CELLS, 4_096);
@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(RESET_BAND_ROWS, 256);
         assert_eq!(FILL_MIN_RUN, 8);
         assert_eq!(JOURNAL_MAX_BYTES, 8 * 1024 * 1024);
-        assert_eq!(JOURNAL_MAX_FRAMES, 240);
+        assert_eq!(JOURNAL_MAX_UPDATES, 240);
         assert_eq!(IDLE_UPDATE_INTERVAL_MS, 1_000);
         assert_eq!(RESYNC_MIN_INTERVAL_MS, 200);
         assert_eq!(RESET_MIN_INTERVAL_MS, 250);
@@ -446,8 +446,8 @@ mod tests {
 
     #[test]
     fn frame_kind_labels_are_stable() {
-        assert_eq!(UpdateKind::Reset.as_str(), "reset");
-        assert_eq!(UpdateKind::Delta.as_str(), "delta");
+        assert_eq!(UpdateKind::Reset.as_str(), "self-contained");
+        assert_eq!(UpdateKind::Delta.as_str(), "chained");
         assert_eq!(UpdateKind::Empty.as_str(), "empty");
     }
 

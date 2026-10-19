@@ -16,7 +16,7 @@
 //!     { "id": "…", "mode": "roundtrip",
 //!       "frames": [
 //!         { "updateId": 1, "baseUpdateId": 0, "width": 64, "height": 48,
-//!           "chunks": [ { "index": 0, "count": 1, "updateBytes": 1234,
+//!           "parts": [ { "index": 0, "count": 1, "updateBytes": 1234,
 //!                         "regions": [ { "x": 32, "y": 16, "width": 8, "height": 8,
 //!                                        "payload": "01e600f4…" } ] } ],
 //!           "expect": { "cells565": "0000f800…", "ack": true } } ] },
@@ -25,10 +25,10 @@
 //!     { "id": "corrupt-trailing-bytes", "mode": "expect-error",
 //!       "reason": "DECODE_ERROR", "coverage": "sparse",
 //!       "payload": "…", "region": { "width": 4, "height": 1 } },
-//!     { "id": "chunk-unknown-codec", "mode": "expect-error",
-//!       "reason": "UNKNOWN_CODEC", "chunk": { …one chunk… } },
+//!     { "id": "part-unknown-codec", "mode": "expect-error",
+//!       "reason": "UNKNOWN_CODEC", "part": { …one part… } },
 //!     { "id": "assembly-incomplete", "mode": "expect-error",
-//!       "reason": "INCOMPLETE_FRAME", "chunks": [ …chunks fed in order… ] }
+//!       "reason": "INCOMPLETE_UPDATE", "parts": [ …parts fed in order… ] }
 //!   ] }
 //! ```
 //!
@@ -61,9 +61,9 @@ use std::fs;
 use common::*;
 use tessellio_core::CapturedFrame;
 use tessellio_core::{
-    AssemblyOutcome, Chunk, Codec, CodecConfig, Coverage, EncodedUpdate, OP_END, OP_FILL, OP_ROW,
-    Region, ScreenStreamEncoder, SurfaceCanvas, UpdateAssembler, UpdateChunker, decode_region_ops,
-    deflate_ops, emit_end, emit_fill, emit_full_row, emit_row, emit_span, validate_chunk,
+    AssemblyOutcome, Codec, CodecConfig, Coverage, EncodedUpdate, OP_END, OP_FILL, OP_ROW, Part,
+    Region, ScreenStreamEncoder, SurfaceCanvas, UpdateAssembler, UpdateSplitter, decode_region_ops,
+    deflate_ops, emit_end, emit_fill, emit_full_row, emit_row, emit_span, validate_part,
 };
 
 use serde_json::{Value, json};
@@ -121,17 +121,17 @@ fn region_json(region: &Region) -> Value {
     })
 }
 
-fn chunk_json(chunk: &Chunk) -> Value {
+fn part_json(part: &Part) -> Value {
     json!({
-        "updateId": chunk.update_id,
-        "baseUpdateId": chunk.update_base,
-        "width": chunk.width,
-        "height": chunk.height,
-        "partIndex": chunk.part_index,
-        "partCount": chunk.part_count,
-        "updateBytes": chunk.update_bytes,
-        "codec": chunk.codec.wire_id(),
-        "regions": chunk.regions.iter().map(region_json).collect::<Vec<_>>(),
+        "updateId": part.update_id,
+        "baseUpdateId": part.update_base,
+        "width": part.width,
+        "height": part.height,
+        "partIndex": part.part_index,
+        "partCount": part.part_count,
+        "updateBytes": part.update_bytes,
+        "codec": part.codec.wire_id(),
+        "regions": part.regions.iter().map(region_json).collect::<Vec<_>>(),
     })
 }
 
@@ -139,13 +139,13 @@ fn chunk_json(chunk: &Chunk) -> Value {
 fn frame_json(
     update_id: u64,
     update_base: u64,
-    chunks: Vec<Chunk>,
+    parts: Vec<Part>,
     canvas: &SurfaceCanvas,
     full_pixels: bool,
 ) -> Value {
-    let update_bytes: u64 = chunks
+    let update_bytes: u64 = parts
         .iter()
-        .flat_map(|chunk| chunk.regions.iter())
+        .flat_map(|part| part.regions.iter())
         .map(|region| region.payload.len() as u64)
         .sum();
     let expect = if full_pixels {
@@ -160,16 +160,16 @@ fn frame_json(
     json!({
         "updateId": update_id,
         "baseUpdateId": update_base,
-        "width": chunks.first().map_or(0, |chunk| chunk.width),
-        "height": chunks.first().map_or(0, |chunk| chunk.height),
-        "chunks": chunks
+        "width": parts.first().map_or(0, |part| part.width),
+        "height": parts.first().map_or(0, |part| part.height),
+        "parts": parts
             .iter()
-            .map(|chunk| {
+            .map(|part| {
                 json!({
-                    "index": chunk.part_index,
-                    "count": chunk.part_count,
+                    "index": part.part_index,
+                    "count": part.part_count,
                     "updateBytes": update_bytes,
-                    "regions": chunk.regions.iter().map(region_json).collect::<Vec<_>>(),
+                    "regions": part.regions.iter().map(region_json).collect::<Vec<_>>(),
                 })
             })
             .collect::<Vec<_>>(),
@@ -189,7 +189,7 @@ fn scene_case(steps: Vec<CapturedFrame>, full_pixels: bool) -> (Vec<Value>, usiz
         ..CodecConfig::default()
     });
     let mut canvas = SurfaceCanvas::new();
-    let chunker = UpdateChunker::new();
+    let splitter = UpdateSplitter::new();
     let mut frames = Vec::new();
     for (index, frame) in steps.iter().enumerate() {
         let planned = encoder
@@ -198,11 +198,11 @@ fn scene_case(steps: Vec<CapturedFrame>, full_pixels: bool) -> (Vec<Value>, usiz
             .expect("a planned frame");
         let encoded = encoder.commit(planned, index as u64 + 1);
         canvas.apply(&encoded).expect("apply");
-        let chunks = chunker.chunk(encoded).expect("chunks");
+        let parts = splitter.part(encoded).expect("parts");
         frames.push(frame_json(
             index as u64 + 1,
             if index == 0 { 0 } else { index as u64 },
-            chunks,
+            parts,
             &canvas,
             full_pixels,
         ));
@@ -233,7 +233,7 @@ fn hand_built_case(
             "baseUpdateId": 0,
             "width": width,
             "height": height,
-            "chunks": [ {
+            "parts": [ {
                 "index": 0,
                 "count": 1,
                 "updateBytes": payload.len() as u64,
@@ -301,7 +301,7 @@ fn hand_built_delta_case(
                 "baseUpdateId": 0,
                 "width": width,
                 "height": height,
-                "chunks": ops_json(&base_payload),
+                "parts": ops_json(&base_payload),
                 "expect": { "cells565": hex_u16(&decode_full(&base_payload, width, height)),
                             "ack": true },
             },
@@ -310,7 +310,7 @@ fn hand_built_delta_case(
                 "baseUpdateId": 1,
                 "width": width,
                 "height": height,
-                "chunks": ops_json(&delta_payload),
+                "parts": ops_json(&delta_payload),
                 "expect": { "cells565": hex_u16(canvas.cells()), "ack": true },
             },
         ],
@@ -352,23 +352,23 @@ fn error_case(
     })
 }
 
-/// Chunk-level error case.
-fn chunk_error_case(id: &str, reason: &str, chunk: Chunk) -> Value {
+/// Part-level error case.
+fn part_error_case(id: &str, reason: &str, part: Part) -> Value {
     json!({
         "id": id,
         "mode": "expect-error",
         "reason": reason,
-        "chunk": chunk_json(&chunk),
+        "part": part_json(&part),
     })
 }
 
-/// Assembly-level error case (a chunk sequence the assembler must refuse).
-fn assembly_error_case(id: &str, reason: &str, chunks: &[Chunk]) -> Value {
+/// Assembly-level error case (a part sequence the assembler must refuse).
+fn assembly_error_case(id: &str, reason: &str, parts: &[Part]) -> Value {
     json!({
         "id": id,
         "mode": "expect-error",
         "reason": reason,
-        "chunks": chunks.iter().map(chunk_json).collect::<Vec<_>>(),
+        "parts": parts.iter().map(part_json).collect::<Vec<_>>(),
     })
 }
 
@@ -393,26 +393,26 @@ fn corpus() -> Value {
 
     // -- resets, small enough to carry full cells -------------------------
     for (id, seed, size) in [
-        ("reset-flat-32x24", 1_u32, (32_u32, 24_u32)),
-        ("reset-flat-1x1", 2, (1, 1)),
-        ("reset-flat-2x2", 3, (2, 2)),
-        ("reset-flat-64x1", 4, (64, 1)),
-        ("reset-flat-1x64", 5, (1, 64)),
-        ("reset-office-64x48", 6, (64, 48)),
-        ("reset-office-96x64", 7, (96, 64)),
-        ("reset-office-33x17", 8, (33, 17)),
-        ("reset-office-97x63", 9, (97, 63)),
-        ("reset-noise-96x64", 10, (96, 64)),
-        ("reset-flat-16x16", 101, (16, 16)),
-        ("reset-flat-3x5", 102, (3, 5)),
-        ("reset-flat-96x64", 103, (96, 64)),
-        ("reset-flat-64x16", 104, (64, 16)),
+        ("self-contained-flat-32x24", 1_u32, (32_u32, 24_u32)),
+        ("self-contained-flat-1x1", 2, (1, 1)),
+        ("self-contained-flat-2x2", 3, (2, 2)),
+        ("self-contained-flat-64x1", 4, (64, 1)),
+        ("self-contained-flat-1x64", 5, (1, 64)),
+        ("self-contained-office-64x48", 6, (64, 48)),
+        ("self-contained-office-96x64", 7, (96, 64)),
+        ("self-contained-office-33x17", 8, (33, 17)),
+        ("self-contained-office-97x63", 9, (97, 63)),
+        ("self-contained-noise-96x64", 10, (96, 64)),
+        ("self-contained-flat-16x16", 101, (16, 16)),
+        ("self-contained-flat-3x5", 102, (3, 5)),
+        ("self-contained-flat-96x64", 103, (96, 64)),
+        ("self-contained-flat-64x16", 104, (64, 16)),
     ] {
-        let frame = if id.starts_with("reset-noise") {
+        let frame = if id.starts_with("self-contained-noise") {
             let mut frame = plain(size.0, size.1, [0, 0, 0, 255]);
             noise_block(&mut frame, 0, 0, size.0, size.1, seed);
             frame
-        } else if id.starts_with("reset-flat") {
+        } else if id.starts_with("self-contained-flat") {
             plain(size.0, size.1, [70, 90, 110, 255])
         } else {
             office(size.0, size.1, seed)
@@ -424,9 +424,9 @@ fn corpus() -> Value {
 
     // -- resets with large canvases (CRC expectations) ---------------------
     for (id, seed, size) in [
-        ("reset-office-256x256", 21_u32, (256_u32, 256_u32)),
-        ("reset-office-48x300-two-bands", 22, (48, 300)),
-        ("reset-office-320x192", 23, (320, 192)),
+        ("self-contained-office-256x256", 21_u32, (256_u32, 256_u32)),
+        ("self-contained-office-48x300-two-bands", 22, (48, 300)),
+        ("self-contained-office-320x192", 23, (320, 192)),
     ] {
         let frame = office(size.0, size.1, seed);
         let (frames, _) = scene_case(vec![frame], false);
@@ -521,10 +521,10 @@ fn corpus() -> Value {
 
     // -- cursors -----------------------------------------------------------
     for (id, seed, size, shift) in [
-        ("delta-pointer-1px-64x48", 31_u32, (64_u32, 48_u32), 1_i32),
-        ("delta-pointer-16px-64x48", 32, (64, 48), 16),
-        ("delta-pointer-1px-320x256", 41, (320, 256), 1),
-        ("delta-pointer-16px-320x256", 42, (320, 256), 16),
+        ("chained-pointer-1px-64x48", 31_u32, (64_u32, 48_u32), 1_i32),
+        ("chained-pointer-16px-64x48", 32, (64, 48), 16),
+        ("chained-pointer-1px-320x256", 41, (320, 256), 1),
+        ("chained-pointer-16px-320x256", 42, (320, 256), 16),
     ] {
         let mut base = office(size.0, size.1, seed);
         let hot = (size.0 as i32 / 4, size.1 as i32 / 4);
@@ -539,20 +539,20 @@ fn corpus() -> Value {
 
     // -- scene deltas ------------------------------------------------------
     for (id, seed, size, full) in [
-        ("delta-typing-line-96x64", 33_u32, (96_u32, 64_u32), true),
-        ("delta-flat-change-64x48", 35, (64, 48), true),
-        ("delta-multi-region-96x64", 36, (96, 64), true),
-        ("delta-odd-size-97x63", 37, (97, 63), true),
-        ("delta-33x17", 38, (33, 17), true),
-        ("delta-scroll-strip-96x64", 39, (96, 64), true),
-        ("delta-noise-block-96x64", 40, (96, 64), true),
-        ("delta-typing-320x256", 43, (320, 256), false),
-        ("delta-flat-change-32x24", 44, (32, 24), true),
-        ("delta-typing-line-64x48", 45, (64, 48), true),
+        ("chained-typing-line-96x64", 33_u32, (96_u32, 64_u32), true),
+        ("chained-flat-change-64x48", 35, (64, 48), true),
+        ("chained-multi-region-96x64", 36, (96, 64), true),
+        ("chained-odd-size-97x63", 37, (97, 63), true),
+        ("chained-33x17", 38, (33, 17), true),
+        ("chained-scroll-strip-96x64", 39, (96, 64), true),
+        ("chained-noise-block-96x64", 40, (96, 64), true),
+        ("chained-typing-320x256", 43, (320, 256), false),
+        ("chained-flat-change-32x24", 44, (32, 24), true),
+        ("chained-typing-line-64x48", 45, (64, 48), true),
     ] {
         let (base, mut changed) = scene_pair(seed, size.0, size.1);
         match id {
-            id if id.starts_with("delta-noise") => {
+            id if id.starts_with("chained-noise") => {
                 noise_block(
                     &mut changed,
                     size.0 / 4,
@@ -562,13 +562,13 @@ fn corpus() -> Value {
                     seed,
                 );
             }
-            id if id.starts_with("delta-scroll") => {
+            id if id.starts_with("chained-scroll") => {
                 scroll_region(&mut changed, 0, 0, size.0, size.1, 8);
             }
-            id if id.starts_with("delta-typing") => {
+            id if id.starts_with("chained-typing") => {
                 text_line(&mut changed, 8, size.1 / 2, 6, seed.wrapping_add(5));
             }
-            id if id.starts_with("delta-multi-region") => {
+            id if id.starts_with("chained-multi-region") => {
                 fill_rect(&mut changed, 2, 2, 6, 6, [200, 20, 20, 255]);
                 fill_rect(
                     &mut changed,
@@ -579,7 +579,7 @@ fn corpus() -> Value {
                     [20, 20, 200, 255],
                 );
             }
-            id if id.starts_with("delta-flat") => {
+            id if id.starts_with("chained-flat") => {
                 fill_rect(&mut changed, 0, 0, size.0, size.1 / 2, [12, 34, 56, 255]);
             }
             _ => {}
@@ -592,18 +592,21 @@ fn corpus() -> Value {
     // -- single-cell, single-row, and single-column regions ---------------
     let single_cases: [(&str, fn(&mut CapturedFrame)); 4] = [
         (
-            "delta-single-cell-1x1-region",
+            "chained-single-cell-1x1-region",
             |frame: &mut CapturedFrame| {
                 fill_rect(frame, 3, 4, 1, 1, [0, 0, 0, 255]);
             },
         ),
-        ("delta-single-row-region", |frame: &mut CapturedFrame| {
+        ("chained-single-row-region", |frame: &mut CapturedFrame| {
             fill_rect(frame, 5, 7, 40, 1, [255, 0, 0, 255]);
         }),
-        ("delta-single-column-region", |frame: &mut CapturedFrame| {
-            fill_rect(frame, 20, 5, 1, 30, [0, 255, 0, 255]);
-        }),
-        ("delta-row-maximum-fill", |frame: &mut CapturedFrame| {
+        (
+            "chained-single-column-region",
+            |frame: &mut CapturedFrame| {
+                fill_rect(frame, 20, 5, 1, 30, [0, 255, 0, 255]);
+            },
+        ),
+        ("chained-row-maximum-fill", |frame: &mut CapturedFrame| {
             fill_rect(frame, 0, 10, 64, 1, [9, 9, 9, 255]);
         }),
     ];
@@ -620,7 +623,7 @@ fn corpus() -> Value {
     let base = office(64, 48, 51);
     let (frames, count) = scene_case(vec![base.clone(), base], true);
     full_pixels += count;
-    cases.push(json!({ "id": "delta-empty-idle", "mode": "roundtrip", "frames": frames }));
+    cases.push(json!({ "id": "chained-empty-idle", "mode": "roundtrip", "frames": frames }));
 
     // -- progressive refresh: 128×128 noise at a 2048 px budget ------------
     {
@@ -642,11 +645,11 @@ fn corpus() -> Value {
             let planned = encoder.encode(&frame).expect("encode").expect("frame");
             let encoded = encoder.commit(planned, step + 1);
             canvas.apply(&encoded).expect("apply");
-            let chunks = UpdateChunker::new().chunk(encoded).expect("chunks");
+            let parts = UpdateSplitter::new().part(encoded).expect("parts");
             frames.push(frame_json(
                 step + 1,
                 if step == 0 { 0 } else { step },
-                chunks,
+                parts,
                 &canvas,
                 false,
             ));
@@ -675,13 +678,13 @@ fn corpus() -> Value {
         }
         let (frames, _) = scene_case(vec![frame], false);
         cases.push(json!({
-            "id": "reset-64-regions-512x512",
+            "id": "self-contained-64-regions-512x512",
             "mode": "roundtrip",
             "frames": frames,
         }));
     }
 
-    // -- one reset frame split across four chunks --------------------------
+    // -- one reset frame split across four parts --------------------------
     {
         let frame = office(64, 1080, 61);
         let mut encoder = ScreenStreamEncoder::new(CodecConfig {
@@ -691,21 +694,18 @@ fn corpus() -> Value {
         });
         let planned = encoder.encode(&frame).expect("encode").expect("frame");
         let encoded = encoder.commit(planned, 1);
-        let whole = UpdateChunker::new().chunk(encoded).expect("chunks");
-        let regions: Vec<Region> = whole
-            .iter()
-            .flat_map(|chunk| chunk.regions.clone())
-            .collect();
+        let whole = UpdateSplitter::new().part(encoded).expect("parts");
+        let regions: Vec<Region> = whole.iter().flat_map(|part| part.regions.clone()).collect();
         let update_bytes: u64 = regions
             .iter()
             .map(|region| region.payload.len() as u64)
             .sum();
         let groups = regions.len().min(4).max(1);
-        let mut chunks = Vec::new();
+        let mut parts = Vec::new();
         let mut start = 0_usize;
         for index in 0..groups {
             let size = regions.len() / groups + usize::from(index < regions.len() % groups);
-            chunks.push(Chunk {
+            parts.push(Part {
                 update_id: 1,
                 update_base: 0,
                 width: frame.width,
@@ -718,16 +718,16 @@ fn corpus() -> Value {
             });
             start += size;
         }
-        // Assemble the four chunks with the receiver oracle, then decode the
+        // Assemble the four parts with the receiver oracle, then decode the
         // assembled frame to compute the expected canvas.
         let mut assembler = UpdateAssembler::new();
         let mut assembled = None;
-        for chunk in &chunks {
-            if let AssemblyOutcome::Complete(frame) = assembler.push(chunk.clone()) {
+        for part in &parts {
+            if let AssemblyOutcome::Complete(frame) = assembler.push(part.clone()) {
                 assembled = Some(frame);
             }
         }
-        let assembled = assembled.expect("the four chunks assemble");
+        let assembled = assembled.expect("the four parts assemble");
         let encoded = EncodedUpdate {
             update_id: 1,
             update_base: 0,
@@ -743,18 +743,18 @@ fn corpus() -> Value {
         let mut canvas = SurfaceCanvas::new();
         canvas.apply(&encoded).expect("apply");
         cases.push(json!({
-            "id": "reset-64x1080-four-chunks",
+            "id": "self-contained-64x1080-four-parts",
             "mode": "roundtrip",
             "frames": [ {
                 "updateId": 1,
                 "baseUpdateId": 0,
                 "width": frame.width,
                 "height": frame.height,
-                "chunks": chunks.iter().map(|chunk| json!({
-                    "index": chunk.part_index,
-                    "count": chunk.part_count,
-                    "updateBytes": chunk.update_bytes,
-                    "regions": chunk.regions.iter().map(region_json).collect::<Vec<_>>(),
+                "parts": parts.iter().map(|part| json!({
+                    "index": part.part_index,
+                    "count": part.part_count,
+                    "updateBytes": part.update_bytes,
+                    "regions": part.regions.iter().map(region_json).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
                 "expect": {
                     "surfaceCrc32": format!("{:08x}", crc32(&surface_bytes(canvas.cells()))),
@@ -938,8 +938,8 @@ fn corpus() -> Value {
         &deflate_ops(&ops, 6).expect("deflate"),
     ));
 
-    // -- chunk-level error cases ------------------------------------------
-    let good = Chunk {
+    // -- part-level error cases ------------------------------------------
+    let good = Part {
         update_id: 10,
         update_base: 9,
         width: 64,
@@ -956,56 +956,48 @@ fn corpus() -> Value {
             payload: vec![1; 16],
         }],
     };
-    assert_eq!(validate_chunk(&good), Ok(()), "the control chunk validates");
+    assert_eq!(validate_part(&good), Ok(()), "the control part validates");
 
-    let mut chunk = good.clone();
-    chunk.update_id = 0;
-    cases.push(chunk_error_case("chunk-bad-id", "DECODE_ERROR", chunk));
+    let mut part = good.clone();
+    part.update_id = 0;
+    cases.push(part_error_case("part-bad-id", "DECODE_ERROR", part));
 
-    let mut chunk = good.clone();
-    chunk.update_base = 99;
-    cases.push(chunk_error_case("chunk-bad-base", "BASE_MISMATCH", chunk));
+    let mut part = good.clone();
+    part.update_base = 99;
+    cases.push(part_error_case("part-bad-base", "BASE_MISMATCH", part));
 
-    let mut chunk = good.clone();
-    chunk.width = 0;
-    cases.push(chunk_error_case(
-        "chunk-bad-geometry",
+    let mut part = good.clone();
+    part.width = 0;
+    cases.push(part_error_case(
+        "part-bad-geometry",
         "GEOMETRY_MISMATCH",
-        chunk,
+        part,
     ));
 
-    let mut chunk = good.clone();
-    chunk.part_count = 0;
-    cases.push(chunk_error_case("chunk-bad-chunk", "CHUNK_GAP", chunk));
+    let mut part = good.clone();
+    part.part_count = 0;
+    cases.push(part_error_case("part-bad-part", "PART_GAP", part));
 
-    let mut chunk = good.clone();
-    chunk.part_index = 2;
-    chunk.part_count = 2;
-    cases.push(chunk_error_case(
-        "chunk-index-out-of-range",
-        "CHUNK_GAP",
-        chunk,
-    ));
+    let mut part = good.clone();
+    part.part_index = 2;
+    part.part_count = 2;
+    cases.push(part_error_case("part-index-out-of-range", "PART_GAP", part));
 
-    let mut chunk = good.clone();
-    chunk.regions[0].x = 63;
-    chunk.regions[0].width = 8;
-    cases.push(chunk_error_case(
-        "chunk-region-outside-frame",
+    let mut part = good.clone();
+    part.regions[0].x = 63;
+    part.regions[0].width = 8;
+    cases.push(part_error_case(
+        "part-region-outside-frame",
         "DECODE_ERROR",
-        chunk,
+        part,
     ));
 
-    let mut chunk = good.clone();
-    chunk.regions[0].payload = Vec::new();
-    cases.push(chunk_error_case(
-        "chunk-empty-payload",
-        "DECODE_ERROR",
-        chunk,
-    ));
+    let mut part = good.clone();
+    part.regions[0].payload = Vec::new();
+    cases.push(part_error_case("part-empty-payload", "DECODE_ERROR", part));
 
-    let mut chunk = good.clone();
-    chunk.regions = vec![
+    let mut part = good.clone();
+    part.regions = vec![
         Region {
             x: 8,
             y: 0,
@@ -1021,20 +1013,16 @@ fn corpus() -> Value {
             payload: vec![1; 16],
         },
     ];
-    cases.push(chunk_error_case(
-        "chunk-region-order",
-        "DECODE_ERROR",
-        chunk,
-    ));
+    cases.push(part_error_case("part-region-order", "DECODE_ERROR", part));
 
     // -- assembly error cases ---------------------------------------------
-    // A single-chunk frame whose declared `update_bytes` disagrees with the
+    // A single-part frame whose declared `update_bytes` disagrees with the
     // payload it carries: the assembler must reject it as incomplete.
     let mut mismatched = good.clone();
     mismatched.update_bytes = 32;
     cases.push(assembly_error_case(
         "assembly-incomplete-frame-bytes",
-        "INCOMPLETE_FRAME",
+        "INCOMPLETE_UPDATE",
         &[mismatched],
     ));
 
@@ -1054,8 +1042,8 @@ fn corpus() -> Value {
     }];
 
     cases.push(assembly_error_case(
-        "assembly-chunk-gap",
-        "CHUNK_GAP",
+        "assembly-part-gap",
+        "PART_GAP",
         &[second.clone()],
     ));
     {
@@ -1117,14 +1105,12 @@ fn the_corpus_is_generated_when_requested() {
                     frames
                         .iter()
                         .map(|frame| {
-                            frame["chunks"]
+                            frame["parts"]
                                 .as_array()
-                                .map(|chunks| {
-                                    chunks
+                                .map(|parts| {
+                                    parts
                                         .iter()
-                                        .map(|chunk| {
-                                            chunk["regions"].as_array().map_or(0, Vec::len)
-                                        })
+                                        .map(|part| part["regions"].as_array().map_or(0, Vec::len))
                                         .sum::<usize>()
                                 })
                                 .unwrap_or(0)

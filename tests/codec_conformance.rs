@@ -32,9 +32,9 @@ use std::path::{Path, PathBuf};
 use common::*;
 use serde_json::Value;
 use tessellio_core::{
-    AssembledUpdate, AssemblyOutcome, Chunk, Codec, CodecConfig, Coverage, DecodeError,
-    EncodedUpdate, Region, ScreenStreamEncoder, SurfaceCanvas, UpdateAssembler, UpdateChunker,
-    decode_region_ops, deflate_ops, emit_end, emit_fill, emit_row, emit_span, validate_chunk,
+    AssembledUpdate, AssemblyOutcome, Codec, CodecConfig, Coverage, DecodeError, EncodedUpdate,
+    Part, Region, ScreenStreamEncoder, SurfaceCanvas, UpdateAssembler, UpdateSplitter,
+    decode_region_ops, deflate_ops, emit_end, emit_fill, emit_row, emit_span, validate_part,
 };
 
 /// Decode a hex string into bytes.
@@ -103,7 +103,7 @@ fn canvas_crc(canvas: &SurfaceCanvas) -> u32 {
     !crc
 }
 
-/// Build the oracle's input frame from an assembled chunk sequence.
+/// Build the oracle's input frame from an assembled part sequence.
 fn assembled_frame(assembled: AssembledUpdate) -> EncodedUpdate {
     EncodedUpdate {
         update_id: assembled.update_id,
@@ -129,7 +129,7 @@ fn v1_empty_delta_advances_the_canvas_without_painting() {
     // part_count=1, update_bytes=0, codec=8, regions=[].
     // Documented proto bytes (12): 08 07 10 06 18 08 20 04 30 01 40 08
     // (the proto encoding itself belongs to the schema's generated types).
-    let chunk = Chunk {
+    let part = Part {
         update_id: 7,
         update_base: 6,
         width: 8,
@@ -140,13 +140,13 @@ fn v1_empty_delta_advances_the_canvas_without_painting() {
         codec: Codec::Tessellio,
         regions: Vec::new(),
     };
-    assert_eq!(chunk.codec.wire_id(), 8);
-    assert_eq!(chunk.update_bytes, 0);
-    assert_eq!(chunk.part_count, 1);
-    assert_eq!(validate_chunk(&chunk), Ok(()));
+    assert_eq!(part.codec.wire_id(), 8);
+    assert_eq!(part.update_bytes, 0);
+    assert_eq!(part.part_count, 1);
+    assert_eq!(validate_part(&part), Ok(()));
 
     let mut assembler = UpdateAssembler::new();
-    let assembled = match assembler.push(chunk) {
+    let assembled = match assembler.push(part) {
         AssemblyOutcome::Complete(assembled) => assembled,
         other => panic!("expected completion, got {other:?}"),
     };
@@ -377,7 +377,7 @@ fn v4_multi_region_sparse_delta_hex_to_pixels_and_back() {
 
     // (a) field-level decode: two disjoint regions, 30 + 16 = 46 frame bytes.
     assert_eq!(a_payload.len() + b_payload.len(), 46);
-    let chunk = Chunk {
+    let part = Part {
         update_id: 9,
         update_base: 8,
         width: 8,
@@ -403,7 +403,7 @@ fn v4_multi_region_sparse_delta_hex_to_pixels_and_back() {
             },
         ],
     };
-    assert_eq!(validate_chunk(&chunk), Ok(()));
+    assert_eq!(validate_part(&part), Ok(()));
 
     // The encoder paints exactly the documented cells; it groups the three
     // changed rows into one region rather than the vector's two, because its
@@ -429,42 +429,42 @@ fn v4_multi_region_sparse_delta_hex_to_pixels_and_back() {
 }
 
 // ---------------------------------------------------------------------------
-// V5 — chunked frame (two chunks) + field table
+// V5 — parted frame (two parts) + field table
 // ---------------------------------------------------------------------------
 
-/// §9.1 V5 chunk 0 payload (16 bytes).
+/// §9.1 V5 part 0 payload (16 bytes).
 const V5_CHUNK0_HEX: &str = "010b00f4ff010000020000010000f800";
-/// §9.1 V5 chunk 1 payload (16 bytes).
+/// §9.1 V5 part 1 payload (16 bytes).
 const V5_CHUNK1_HEX: &str = "010b00f4ff0100000200000100e00700";
 
 #[test]
-fn v5_chunked_frame_hex_to_pixels_and_back() {
-    let chunk0_payload = unhex(V5_CHUNK0_HEX);
-    let chunk1_payload = unhex(V5_CHUNK1_HEX);
-    assert_eq!(chunk0_payload.len(), 16);
-    assert_eq!(chunk1_payload.len(), 16);
+fn v5_parted_frame_hex_to_pixels_and_back() {
+    let part0_payload = unhex(V5_CHUNK0_HEX);
+    let part1_payload = unhex(V5_CHUNK1_HEX);
+    assert_eq!(part0_payload.len(), 16);
+    assert_eq!(part1_payload.len(), 16);
 
     let mut ops = Vec::new();
     emit_row(&mut ops, 0);
     emit_span(&mut ops, 0, &[0xf800]);
     emit_end(&mut ops);
-    assert_eq!(stored(&ops), chunk0_payload, "chunk 0 payload bytes");
+    assert_eq!(stored(&ops), part0_payload, "part 0 payload bytes");
     let mut ops = Vec::new();
     emit_row(&mut ops, 0);
     emit_span(&mut ops, 0, &[0x07e0]);
     emit_end(&mut ops);
-    assert_eq!(stored(&ops), chunk1_payload, "chunk 1 payload bytes");
+    assert_eq!(stored(&ops), part1_payload, "part 1 payload bytes");
 
     assert_eq!(
-        decode_payload(&chunk0_payload, 1, 1, Coverage::Sparse).unwrap(),
+        decode_payload(&part0_payload, 1, 1, Coverage::Sparse).unwrap(),
         vec![0xf800]
     );
     assert_eq!(
-        decode_payload(&chunk1_payload, 1, 1, Coverage::Sparse).unwrap(),
+        decode_payload(&part1_payload, 1, 1, Coverage::Sparse).unwrap(),
         vec![0x07e0]
     );
 
-    let chunk0 = Chunk {
+    let part0 = Part {
         update_id: 10,
         update_base: 9,
         width: 8,
@@ -478,10 +478,10 @@ fn v5_chunked_frame_hex_to_pixels_and_back() {
             y: 1,
             width: 1,
             height: 1,
-            payload: chunk0_payload,
+            payload: part0_payload,
         }],
     };
-    let chunk1 = Chunk {
+    let part1 = Part {
         update_id: 10,
         update_base: 9,
         width: 8,
@@ -495,20 +495,20 @@ fn v5_chunked_frame_hex_to_pixels_and_back() {
             y: 0,
             width: 1,
             height: 1,
-            payload: chunk1_payload,
+            payload: part1_payload,
         }],
     };
-    assert_eq!(validate_chunk(&chunk0), Ok(()));
-    assert_eq!(validate_chunk(&chunk1), Ok(()));
+    assert_eq!(validate_part(&part0), Ok(()));
+    assert_eq!(validate_part(&part1), Ok(()));
 
-    // Expected: applied only after both chunks (Σ payloads = 32 = update_bytes).
+    // Expected: applied only after both parts (Σ payloads = 32 = update_bytes).
     let mut assembler = UpdateAssembler::new();
     assert_eq!(
-        assembler.push(chunk0.clone()),
+        assembler.push(part0.clone()),
         AssemblyOutcome::Pending,
-        "chunk 0 alone must not be applied"
+        "part 0 alone must not be applied"
     );
-    let assembled = match assembler.push(chunk1.clone()) {
+    let assembled = match assembler.push(part1.clone()) {
         AssemblyOutcome::Complete(assembled) => assembled,
         other => panic!("expected completion, got {other:?}"),
     };
@@ -518,12 +518,12 @@ fn v5_chunked_frame_hex_to_pixels_and_back() {
         .map(|region| region.payload.len())
         .sum();
     assert_eq!(sum as u64, assembled.update_bytes);
-    assert_eq!(assembled.chunks, 2);
+    assert_eq!(assembled.parts, 2);
 
-    // A receiver that sees chunk 1 first refuses the frame.
+    // A receiver that sees part 1 first refuses the frame.
     let mut assembler = UpdateAssembler::new();
     assert!(matches!(
-        assembler.push(chunk1.clone()),
+        assembler.push(part1.clone()),
         AssemblyOutcome::Rejected(_)
     ));
 
@@ -550,9 +550,9 @@ fn v5_chunked_frame_hex_to_pixels_and_back() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_frame_and_chunk_caps_reject_oversized_input() {
+fn the_frame_and_part_caps_reject_oversized_input() {
     // A region payload over the wire cap.
-    let chunk = Chunk {
+    let part = Part {
         update_id: 1,
         update_base: 0,
         width: 64,
@@ -569,18 +569,18 @@ fn the_frame_and_chunk_caps_reject_oversized_input() {
             payload: vec![0; 262_145],
         }],
     };
-    assert!(validate_chunk(&chunk).is_err(), "payload over the wire cap");
+    assert!(validate_part(&part).is_err(), "payload over the wire cap");
 
     // A frame whose declared bytes exceed the frame cap.
-    let mut chunk = chunk;
-    chunk.regions[0].payload = vec![0; 16];
-    chunk.update_bytes = (tessellio_core::MAX_UPDATE_WIRE_BYTES + 1) as u64;
+    let mut part = part;
+    part.regions[0].payload = vec![0; 16];
+    part.update_bytes = (tessellio_core::MAX_UPDATE_WIRE_BYTES + 1) as u64;
     assert!(
-        validate_chunk(&chunk).is_err(),
+        validate_part(&part).is_err(),
         "frame bytes over the frame cap"
     );
 
-    // The chunker refuses a frame it cannot split inside its caps.
+    // The splitter refuses a frame it cannot split inside its caps.
     let mut encoder = ScreenStreamEncoder::new(CodecConfig {
         delta_deflate_level: 0,
         reset_deflate_level: 0,
@@ -590,13 +590,13 @@ fn the_frame_and_chunk_caps_reject_oversized_input() {
     let encoded = encode_frame(&mut encoder, &frame, 1);
     let mut encoded = encoded;
     encoded.regions[0].payload = vec![0; 1024 * 1024];
-    let chunker = UpdateChunker {
-        max_chunk_bytes: 4096,
-        max_regions_per_chunk: 32,
+    let splitter = UpdateSplitter {
+        max_part_bytes: 4096,
+        max_regions_per_part: 32,
     };
     assert!(
-        chunker.chunk(encoded).is_err(),
-        "a region larger than the chunk cap is refused, never split"
+        splitter.part(encoded).is_err(),
+        "a region larger than the part cap is refused, never split"
     );
 }
 
@@ -650,7 +650,7 @@ fn the_canvas_rejects_a_frame_whose_base_it_does_not_hold() {
     let mut canvas = SurfaceCanvas::new();
     assert!(canvas.apply(&frame(2, 1)).is_err());
     // After a reset, only the reset's id is an acceptable base.
-    canvas.apply(&frame(1, 0)).expect("reset applies");
+    canvas.apply(&frame(1, 0)).expect("self-contained applies");
     assert!(canvas.apply(&frame(3, 2)).is_err());
     assert!(canvas.apply(&frame(2, 1)).is_ok());
     assert_eq!(canvas.applied_update_id(), 2);
@@ -671,10 +671,12 @@ fn the_canvas_discards_a_stale_delta_without_a_resync() {
         reset_reasons: Default::default(),
     };
     let mut canvas = SurfaceCanvas::new();
-    canvas.apply(&frame(1, 0, None)).expect("reset applies");
+    canvas
+        .apply(&frame(1, 0, None))
+        .expect("self-contained applies");
     canvas
         .apply(&frame(2, 1, Some(span_region(0, 0, 0xf800))))
-        .expect("delta applies");
+        .expect("chained applies");
     // A delta at or below the applied id is stale: discarded, no error, and the
     // canvas keeps what it holds (R0).
     assert!(
@@ -771,23 +773,23 @@ fn region_from_json(region: &Value) -> Region {
     }
 }
 
-/// A standalone chunk (the `expect-error` chunk shape).
-fn chunk_from_json(chunk: &Value) -> Chunk {
-    let regions: Vec<Region> = chunk["regions"]
+/// A standalone part (the `expect-error` part shape).
+fn part_from_json(part: &Value) -> Part {
+    let regions: Vec<Region> = part["regions"]
         .as_array()
         .expect("regions")
         .iter()
         .map(region_from_json)
         .collect();
-    Chunk {
-        update_id: u64_field(chunk, "updateId"),
-        update_base: u64_field(chunk, "baseUpdateId"),
-        width: u32_field(chunk, "width"),
-        height: u32_field(chunk, "height"),
-        part_index: u32_field(chunk, "partIndex"),
-        part_count: u32_field(chunk, "partCount"),
-        update_bytes: u64_field(chunk, "updateBytes"),
-        codec: Codec::from_wire_id(u32_field(chunk, "codec") as i32)
+    Part {
+        update_id: u64_field(part, "updateId"),
+        update_base: u64_field(part, "baseUpdateId"),
+        width: u32_field(part, "width"),
+        height: u32_field(part, "height"),
+        part_index: u32_field(part, "partIndex"),
+        part_count: u32_field(part, "partCount"),
+        update_bytes: u64_field(part, "updateBytes"),
+        codec: Codec::from_wire_id(u32_field(part, "codec") as i32)
             .expect("the corpus carries tessellio"),
         regions,
     }
@@ -804,37 +806,37 @@ fn run_corpus_case(case: &Value) {
                 let base = u64_field(frame, "baseUpdateId");
                 let width = u32_field(frame, "width");
                 let height = u32_field(frame, "height");
-                // Inside a frame the chunk identity lives at the frame level
-                // (the §9.4 schema); the standalone `chunk` case carries it
+                // Inside a frame the part identity lives at the frame level
+                // (the §9.4 schema); the standalone `part` case carries it
                 // itself. Both are accepted here.
-                let chunks: Vec<Chunk> = frame["chunks"]
+                let parts: Vec<Part> = frame["parts"]
                     .as_array()
-                    .expect("chunks")
+                    .expect("parts")
                     .iter()
-                    .map(|chunk| {
-                        let regions: Vec<Region> = chunk["regions"]
+                    .map(|part| {
+                        let regions: Vec<Region> = part["regions"]
                             .as_array()
                             .expect("regions")
                             .iter()
                             .map(region_from_json)
                             .collect();
-                        Chunk {
+                        Part {
                             update_id,
                             update_base: base,
                             width,
                             height,
-                            part_index: chunk["index"].as_u64().unwrap_or(0) as u32,
-                            part_count: chunk["count"].as_u64().unwrap_or(1) as u32,
-                            update_bytes: chunk["updateBytes"].as_u64().expect("updateBytes"),
+                            part_index: part["index"].as_u64().unwrap_or(0) as u32,
+                            part_count: part["count"].as_u64().unwrap_or(1) as u32,
+                            update_bytes: part["updateBytes"].as_u64().expect("updateBytes"),
                             codec: Codec::Tessellio,
                             regions,
                         }
                     })
                     .collect();
-                let recorded = chunks.first().expect("a chunk").update_bytes;
-                let sum: usize = chunks
+                let recorded = parts.first().expect("a part").update_bytes;
+                let sum: usize = parts
                     .iter()
-                    .flat_map(|chunk| chunk.regions.iter())
+                    .flat_map(|part| part.regions.iter())
                     .map(|region| region.payload.len())
                     .sum();
                 assert_eq!(
@@ -844,9 +846,9 @@ fn run_corpus_case(case: &Value) {
 
                 let mut assembler = UpdateAssembler::new();
                 let mut assembled = None;
-                for chunk in chunks {
-                    assert_eq!(validate_chunk(&chunk), Ok(()), "{id}: chunk validates");
-                    match assembler.push(chunk) {
+                for part in parts {
+                    assert_eq!(validate_part(&part), Ok(()), "{id}: part validates");
+                    match assembler.push(part) {
                         AssemblyOutcome::Complete(frame) => assembled = Some(frame),
                         AssemblyOutcome::Pending => {}
                         other => panic!("{id}: unexpected assembly outcome {other:?}"),
@@ -893,25 +895,24 @@ fn run_corpus_case(case: &Value) {
                 let error = decode_payload(&unhex(payload), width, height, coverage)
                     .expect_err(&format!("{id}: must be rejected"));
                 assert_eq!(error.reason_code(), reason, "{id}: rejection reason");
-            } else if let Some(chunk) = case.get("chunk") {
-                let chunk = chunk_from_json(chunk);
-                let rejection =
-                    validate_chunk(&chunk).expect_err(&format!("{id}: must be rejected"));
+            } else if let Some(part) = case.get("part") {
+                let part = part_from_json(part);
+                let rejection = validate_part(&part).expect_err(&format!("{id}: must be rejected"));
                 assert_eq!(rejection.reason_code(), reason, "{id}: rejection reason");
-            } else if let Some(chunks) = case["chunks"].as_array() {
+            } else if let Some(parts) = case["parts"].as_array() {
                 let mut assembler = UpdateAssembler::new();
                 let mut outcome = None;
-                for chunk in chunks {
-                    outcome = Some(assembler.push(chunk_from_json(chunk)));
+                for part in parts {
+                    outcome = Some(assembler.push(part_from_json(part)));
                 }
-                match outcome.expect("at least one chunk") {
+                match outcome.expect("at least one part") {
                     AssemblyOutcome::Rejected(rejection) => {
                         assert_eq!(rejection.reason_code(), reason, "{id}: rejection reason")
                     }
                     other => panic!("{id}: expected a rejection, got {other:?}"),
                 }
             } else {
-                panic!("{id}: an expect-error case needs payload, chunk, or chunks");
+                panic!("{id}: an expect-error case needs payload, part, or parts");
             }
         }
         other => panic!("{id}: unknown mode {other}"),
@@ -972,7 +973,7 @@ fn the_vectors_file_matches_the_embedded_vectors_when_present() {
 }
 
 #[test]
-fn the_chunker_replicates_frame_identity_in_every_chunk() {
+fn the_parter_replicates_frame_identity_in_every_part() {
     let mut encoder = ScreenStreamEncoder::new(CodecConfig {
         delta_deflate_level: 0,
         reset_deflate_level: 0,
@@ -980,17 +981,17 @@ fn the_chunker_replicates_frame_identity_in_every_chunk() {
     });
     let frame = office(96, 64, 3);
     let encoded = encode_frame(&mut encoder, &frame, 4);
-    let chunks = UpdateChunker::new().chunk(encoded.clone()).unwrap();
-    assert!(!chunks.is_empty());
+    let parts = UpdateSplitter::new().part(encoded.clone()).unwrap();
+    assert!(!parts.is_empty());
     let total = encoded.payload_bytes();
-    for (index, chunk) in chunks.iter().enumerate() {
-        assert_eq!(chunk.part_index, index as u32);
-        assert_eq!(chunk.part_count, chunks.len() as u32);
-        assert_eq!(chunk.update_bytes, total as u64);
-        assert_eq!(chunk.update_id, 4);
-        assert_eq!(chunk.update_base, 0);
-        assert_eq!(chunk.codec, Codec::Tessellio);
-        assert_eq!(validate_chunk(chunk), Ok(()));
+    for (index, part) in parts.iter().enumerate() {
+        assert_eq!(part.part_index, index as u32);
+        assert_eq!(part.part_count, parts.len() as u32);
+        assert_eq!(part.update_bytes, total as u64);
+        assert_eq!(part.update_id, 4);
+        assert_eq!(part.update_base, 0);
+        assert_eq!(part.codec, Codec::Tessellio);
+        assert_eq!(validate_part(part), Ok(()));
     }
 }
 

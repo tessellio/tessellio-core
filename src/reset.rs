@@ -110,10 +110,10 @@ fn encode_wave(
         }
         return Ok(all);
     }
-    let chunk = bands.len().div_ceil(workers).max(1);
+    let part = bands.len().div_ceil(workers).max(1);
     thread::scope(|scope| {
         let mut handles = Vec::new();
-        for group in bands.chunks(chunk) {
+        for group in bands.chunks(part) {
             handles.push(scope.spawn(move || {
                 // One deflater per worker, reused across that worker's bands.
                 let mut deflater = Deflater::new(level);
@@ -128,9 +128,9 @@ fn encode_wave(
         }
         let mut all = Vec::with_capacity(bands.len());
         for handle in handles {
-            let part = handle
-                .join()
-                .map_err(|_| CodecError::Encode("reset band encoder panicked".to_string()))??;
+            let part = handle.join().map_err(|_| {
+                CodecError::Encode("self-contained band encoder panicked".to_string())
+            })??;
             all.extend(part);
         }
         Ok(all)
@@ -154,8 +154,9 @@ fn encode_band(
         return split_band(buffer, y, height, level, deflater, out);
     }
     let width = buffer.width();
-    validate_region_ops(&ops, width, height, Coverage::Full)
-        .map_err(|error| CodecError::Encode(format!("reset band self-check failed: {error:?}")))?;
+    validate_region_ops(&ops, width, height, Coverage::Full).map_err(|error| {
+        CodecError::Encode(format!("self-contained band self-check failed: {error:?}"))
+    })?;
     let compress_started = std::time::Instant::now();
     let mut payload = Vec::with_capacity(ops.len() / 2 + 64);
     deflater.deflate_into(&ops, level, &mut payload)?;

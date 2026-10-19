@@ -25,13 +25,12 @@
 //! - [`encode`] — the stream encoder, the refresh budget, and commit.
 //! - [`reset`] — band-parallel self-contained updates.
 //! - [`reference`] — the reference surface and its undo journal.
-//! - [`chunk`] — update chunking, chunk validation, receiver assembly.
+//! - [`part`] — the update's parts: splitting, validation, and assembly.
 //! - [`decode`] — the decoder, the bounded op walk, and the surface oracle.
 //! - [`telemetry`] — what the codec measures, and how a caller collects it.
 //! - [`error`] — the codec's error vocabulary.
 
 pub mod buffer;
-pub mod chunk;
 pub mod convert;
 pub mod decode;
 pub mod detect;
@@ -40,15 +39,12 @@ pub mod error;
 pub mod format;
 pub mod frame;
 pub mod ops;
+pub mod part;
 pub mod reference;
 pub mod reset;
 pub mod telemetry;
 
 pub use buffer::Surface;
-pub use chunk::{
-    AssembledUpdate, AssemblyOutcome, Chunk, ChunkRejection, UpdateAssembler, UpdateChunker,
-    validate_chunk,
-};
 pub use convert::{cells_to_rgba, composite_pointer_in_place, rgba_to_cells};
 pub use decode::{
     Coverage, DecodeError, SurfaceCanvas, decode_region_ops, inflate_region, validate_region_ops,
@@ -60,9 +56,9 @@ pub use format::UpdateKind;
 pub use format::{
     CODEC_NAME, CODEC_WIRE_ID, Codec, DELTA_OPS_BUDGET_BYTES, DELTA_REFRESH_CELLS,
     DELTA_REFRESH_MIN_CELLS, FILL_MIN_RUN, IDLE_UPDATE_INTERVAL_MS, JOURNAL_MAX_BYTES,
-    JOURNAL_MAX_FRAMES, MAX_CHUNK_WIRE_BYTES, MAX_CHUNKS_PER_UPDATE, MAX_REGION_OPS_BYTES,
-    MAX_REGION_WIRE_BYTES, MAX_REGIONS_PER_CHUNK, MAX_REGIONS_PER_UPDATE, MAX_SURFACE_CELLS,
-    MAX_SURFACE_DIMENSION, MAX_UPDATE_WIRE_BYTES, RESET_BAND_ROWS, RESET_MAX_CHUNKS,
+    JOURNAL_MAX_UPDATES, MAX_PART_WIRE_BYTES, MAX_PARTS_PER_UPDATE, MAX_REGION_OPS_BYTES,
+    MAX_REGION_WIRE_BYTES, MAX_REGIONS_PER_PART, MAX_REGIONS_PER_UPDATE, MAX_SURFACE_CELLS,
+    MAX_SURFACE_DIMENSION, MAX_UPDATE_WIRE_BYTES, RESET_BAND_ROWS, RESET_MAX_PARTS,
     RESET_MIN_INTERVAL_MS, RESET_PAYLOAD_BUDGET_BYTES, RESYNC_MIN_INTERVAL_MS, Rect, Region,
     ResetReason, ResetReasons, ResyncReason,
 };
@@ -70,6 +66,10 @@ pub use frame::{CapturedFrame, PointerShape};
 pub use ops::{
     Deflater, OP_END, OP_FILL, OP_ROW, OP_SPAN, deflate_ops, emit_end, emit_fill, emit_full_row,
     emit_row, emit_span, emit_spans, truncate_spans,
+};
+pub use part::{
+    AssembledUpdate, AssemblyOutcome, Part, PartRejection, UpdateAssembler, UpdateSplitter,
+    validate_part,
 };
 pub use reference::{
     JournalEntry, ReferenceJournal, UndoSegment, WriteSpan, apply_writes, undo_from_spans,

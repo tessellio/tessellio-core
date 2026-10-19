@@ -109,7 +109,7 @@ impl CodecConfig {
     }
 }
 
-/// One encoded frame before chunking.
+/// One encoded frame before parting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodedUpdate {
     /// Monotonic frame id assigned by the pipeline.
@@ -135,7 +135,7 @@ pub struct EncodedUpdate {
 }
 
 impl EncodedUpdate {
-    /// Frame kind used by metrics and the chunker.
+    /// Frame kind used by metrics and the splitter.
     pub fn kind(&self) -> UpdateKind {
         if self.update_base == 0 {
             UpdateKind::Reset
@@ -1166,7 +1166,7 @@ mod tests {
             ..codec_config()
         });
         let frame = office(64, 48, 2);
-        let planned = encoder.encode(&frame).unwrap().expect("reset");
+        let planned = encoder.encode(&frame).unwrap().expect("self-contained");
         let _ = encoder.commit(planned, 1);
         assert!(
             encoder.encode(&frame).unwrap().is_none(),

@@ -9,8 +9,8 @@
 use tessellio_core::CapturedFrame;
 use tessellio_core::PointerShape;
 use tessellio_core::{
-    Chunk, CodecConfig, Coverage, DecodeError, EncodedUpdate, ScreenStreamEncoder, Surface,
-    SurfaceCanvas, UpdateChunker, decode_region_ops, rgba_to_cells,
+    CodecConfig, Coverage, DecodeError, EncodedUpdate, Part, ScreenStreamEncoder, Surface,
+    SurfaceCanvas, UpdateSplitter, decode_region_ops, rgba_to_cells,
 };
 
 /// Deterministic linear-congruential generator (numerical recipes constants).
@@ -364,9 +364,9 @@ pub fn encode_frame_opt(
         .map(|planned| encoder.commit(planned, update_id))
 }
 
-/// Split an encoded frame into its chunks.
-pub fn chunks_of(frame: &EncodedUpdate) -> Vec<Chunk> {
-    UpdateChunker::new().chunk(frame.clone()).expect("chunks")
+/// Split an encoded frame into its parts.
+pub fn parts_of(frame: &EncodedUpdate) -> Vec<Part> {
+    UpdateSplitter::new().part(frame.clone()).expect("parts")
 }
 
 /// Decode a frame with the receiver oracle.

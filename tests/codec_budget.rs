@@ -28,8 +28,8 @@ use std::time::Instant;
 use common::*;
 use tessellio_core::CapturedFrame;
 use tessellio_core::{
-    CodecConfig, DELTA_REFRESH_CELLS, DELTA_REFRESH_MIN_CELLS, MAX_CHUNK_WIRE_BYTES,
-    MAX_CHUNKS_PER_UPDATE, MAX_REGION_WIRE_BYTES, MAX_REGIONS_PER_CHUNK, MAX_REGIONS_PER_UPDATE,
+    CodecConfig, DELTA_REFRESH_CELLS, DELTA_REFRESH_MIN_CELLS, MAX_PART_WIRE_BYTES,
+    MAX_PARTS_PER_UPDATE, MAX_REGION_WIRE_BYTES, MAX_REGIONS_PER_PART, MAX_REGIONS_PER_UPDATE,
     MAX_UPDATE_WIRE_BYTES, ScreenStreamEncoder, UpdateKind,
 };
 
@@ -102,11 +102,11 @@ fn measure(scenario: &str, frame: &tessellio_core::EncodedUpdate, extra: &str) {
 
 /// Per-frame invariants every scenario must hold.
 fn assert_frame_invariants(frame: &tessellio_core::EncodedUpdate, label: &str) {
-    let chunks = chunks_of(frame);
+    let parts = parts_of(frame);
     assert!(
-        chunks.len() <= MAX_CHUNKS_PER_UPDATE,
-        "{label}: {} chunks",
-        chunks.len()
+        parts.len() <= MAX_PARTS_PER_UPDATE,
+        "{label}: {} parts",
+        parts.len()
     );
     let total: usize = frame.payload_bytes();
     assert!(
@@ -125,16 +125,16 @@ fn assert_frame_invariants(frame: &tessellio_core::EncodedUpdate, label: &str) {
             region.payload.len()
         );
     }
-    let mut per_chunk = vec![0_usize; chunks.len()];
-    for chunk in &chunks {
-        assert!(chunk.payload_bytes() <= MAX_CHUNK_WIRE_BYTES);
-        assert!(chunk.regions.len() <= MAX_REGIONS_PER_CHUNK);
-        per_chunk[chunk.part_index as usize] += chunk.payload_bytes();
+    let mut per_part = vec![0_usize; parts.len()];
+    for part in &parts {
+        assert!(part.payload_bytes() <= MAX_PART_WIRE_BYTES);
+        assert!(part.regions.len() <= MAX_REGIONS_PER_PART);
+        per_part[part.part_index as usize] += part.payload_bytes();
     }
     assert_eq!(
-        per_chunk.iter().sum::<usize>(),
+        per_part.iter().sum::<usize>(),
         total,
-        "{label}: chunk payloads must sum to the frame"
+        "{label}: part payloads must sum to the frame"
     );
     // Exact change detection: a frame never carries more cells than changed,
     // and the over-send bound is therefore always satisfied.
@@ -485,7 +485,7 @@ fn static_frame_costs_nothing_and_stays_inside_its_cpu_ratio() {
 }
 
 #[test]
-fn reset_frame_fits_the_wire_budget_and_the_chunk_caps() {
+fn reset_frame_fits_the_wire_budget_and_the_part_caps() {
     let mut encoder = ScreenStreamEncoder::new(codec_config());
     let frame = office(1920, 1080, 31);
     let planned = encoder.encode(&frame).unwrap().unwrap();
@@ -497,12 +497,12 @@ fn reset_frame_fits_the_wire_budget_and_the_chunk_caps() {
         reset.payload_bytes()
     );
     assert!(
-        reset.payload_bytes() <= 4 * MAX_CHUNK_WIRE_BYTES,
-        "a reset frame fills at most four chunks"
+        reset.payload_bytes() <= 4 * MAX_PART_WIRE_BYTES,
+        "a reset frame fills at most four parts"
     );
-    let chunks = chunks_of(&reset);
-    assert!(chunks.len() <= 4, "{} chunks", chunks.len());
-    assert_frame_invariants(&reset, "reset");
+    let parts = parts_of(&reset);
+    assert!(parts.len() <= 4, "{} parts", parts.len());
+    assert_frame_invariants(&reset, "self-contained");
 
     // The canvas converges on the source and every band decodes.
     let canvas = decode_frame(&reset);
