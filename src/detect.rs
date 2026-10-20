@@ -16,11 +16,6 @@ use crate::format::{MAX_SURFACE_DIMENSION, Rect};
 /// changed cells, so the tile size can no longer leak into the byte counts.
 pub const TILE: u32 = 64;
 
-/// Largest rectangle count searched exhaustively before the merge heuristic
-/// switches to a bounded neighbourhood window.
-const EXACT_MERGE_LIMIT: usize = 512;
-/// Neighbourhood window used above [`EXACT_MERGE_LIMIT`].
-const WINDOWED_MERGE_WINDOW: usize = 64;
 /// Piece-count ceiling while removing rectangle overlaps.
 const DISJOINT_PIECE_LIMIT: usize = 256;
 
@@ -310,6 +305,7 @@ pub fn rects_from_map(
 
 /// Shrink one tile-aligned rectangle to the exact bounding box of the cells
 /// that differ between `current` and `reference`; `None` when none differ.
+///
 pub fn shrink_rect(current: &Surface, reference: &Surface, rect: Rect) -> Option<Rect> {
     if rect.is_empty() || !rect.is_inside(current.width(), current.height()) {
         return None;
@@ -359,41 +355,63 @@ pub fn shrink_all(current: &Surface, reference: &Surface, rects: &mut Vec<Rect>)
 
 /// Merge rectangles until at most `limit` remain.
 ///
-/// The pair whose bounding box adds the least area is merged first, with a
-/// deterministic tie-break on the merged box. Above [`EXACT_MERGE_LIMIT`]
-/// rectangles the search is restricted to a bounded neighbourhood window so the
-/// cost of a pathological frame stays bounded.
+/// The rectangles are *grouped* by a uniform grid rather than merged pairwise:
+/// every rectangle belongs to the grid cell its centre lies in, and the
+/// rectangles of one cell become the smallest rectangle covering them. The
+/// grid starts at the change detector's tile size and doubles until its
+/// occupied cells fit the limit, so the merged set covers exactly the cells
+/// the input covered — the merge adds area, never cells.
+///
+/// The search is bounded where the pairwise search was not. The grid is
+/// coarsened at most `log2(MAX_SURFACE_DIMENSION / TILE)` times, and every
+/// coarsening is a sort over the rectangles, so merging `n` rectangles costs
+/// `O(n log n)` whatever `n` is: a frame with ten rectangles and a frame with
+/// ten thousand cost the same order, and neither can hold the encoder up.
 pub fn merge_to_limit(rects: &mut Vec<Rect>, limit: usize) {
     let limit = limit.max(1);
-    while rects.len() > limit {
-        let window = if rects.len() > EXACT_MERGE_LIMIT {
-            WINDOWED_MERGE_WINDOW
-        } else {
-            usize::MAX
-        };
-        let mut best: Option<(u64, (u32, u32, u32, u32), usize, usize)> = None;
-        for i in 0..rects.len() {
-            let end = i.saturating_add(1).saturating_add(window).min(rects.len());
-            for j in i + 1..end {
-                let merged = rects[i].union(rects[j]);
-                let added = merged
-                    .area()
-                    .saturating_sub(rects[i].area() + rects[j].area());
-                let key = (merged.y, merged.x, merged.width, merged.height);
-                let better = match &best {
-                    None => true,
-                    Some((best_added, best_key, _, _)) => (added, key) < (*best_added, *best_key),
-                };
-                if better {
-                    best = Some((added, key, i, j));
-                }
+    if rects.len() <= limit {
+        return;
+    }
+    let mut cell = TILE;
+    let groups = loop {
+        let groups = grid_groups(rects, cell);
+        if groups.len() <= limit || cell >= MAX_SURFACE_DIMENSION {
+            break groups;
+        }
+        cell = cell.saturating_mul(2);
+    };
+    *rects = groups;
+    rects.sort_by_key(|rect| (rect.y, rect.x, rect.width, rect.height));
+}
+
+/// The smallest rectangle covering the rectangles of every occupied grid cell.
+///
+/// The cells are visited in `(y, x)` order, so the result is the same for the
+/// same rectangles whatever order they arrive in.
+fn grid_groups(rects: &[Rect], cell: u32) -> Vec<Rect> {
+    let mut order: Vec<usize> = (0..rects.len()).collect();
+    order.sort_unstable_by_key(|index| cell_of(rects[*index], cell));
+    let mut groups: Vec<Rect> = Vec::with_capacity(rects.len());
+    let mut occupied: Option<(u32, u32)> = None;
+    for index in order {
+        let rect = rects[index];
+        let key = cell_of(rect, cell);
+        match groups.last_mut() {
+            Some(last) if occupied == Some(key) => *last = last.union(rect),
+            _ => {
+                groups.push(rect);
+                occupied = Some(key);
             }
         }
-        let Some((_, _, i, j)) = best else { break };
-        let merged = rects[i].union(rects[j]);
-        rects[i] = merged;
-        rects.swap_remove(j);
     }
+    groups
+}
+
+/// The grid cell a rectangle belongs to: the cell its centre lies in.
+fn cell_of(rect: Rect, cell: u32) -> (u32, u32) {
+    let centre_x = rect.x + rect.width / 2;
+    let centre_y = rect.y + rect.height / 2;
+    (centre_y / cell, centre_x / cell)
 }
 
 /// Remove overlaps introduced by merging.
@@ -658,17 +676,68 @@ mod tests {
     }
 
     #[test]
-    fn merging_prefers_the_smallest_added_area() {
+    fn merging_groups_the_rectangles_into_at_most_the_limit() {
         let mut rects = vec![
             Rect::new(0, 0, 10, 10),
             Rect::new(20, 0, 10, 10),
             Rect::new(0, 40, 10, 10),
         ];
         merge_to_limit(&mut rects, 2);
+        // All three rectangles lie in one tile, so one group holds them.
+        assert_eq!(rects, vec![Rect::new(0, 0, 30, 50)]);
+    }
+
+    #[test]
+    fn merging_divides_the_rectangles_that_do_not_fit() {
+        // One rectangle per tile of a 16×16 tile grid: the grid is coarsened
+        // until its occupied cells fit the limit.
+        let source: Vec<Rect> = (0..256_u32)
+            .map(|index| {
+                let x = (index % 16) * 64;
+                let y = (index / 16) * 64;
+                Rect::new(x, y, 64, 64)
+            })
+            .collect();
+        let mut rects = source.clone();
+        merge_to_limit(&mut rects, 4);
+        assert!(rects.len() <= 4, "{} rectangles", rects.len());
+        assert!(!rects.is_empty());
+    }
+
+    #[test]
+    fn merging_keeps_every_covered_cell() {
+        let source: Vec<Rect> = (0..40_u32)
+            .map(|index| {
+                let x = (index * 137) % 900;
+                let y = (index * 271) % 700;
+                Rect::new(x, y, 1 + index % 7, 1 + index % 5)
+            })
+            .collect();
+        let mut rects = source.clone();
+        merge_to_limit(&mut rects, 8);
+        assert!(rects.len() <= 8);
+        for rect in &source {
+            for y in rect.y..rect.y + rect.height {
+                for x in rect.x..rect.x + rect.width {
+                    let covered = rects.iter().any(|merged| {
+                        x >= merged.x
+                            && x < merged.x + merged.width
+                            && y >= merged.y
+                            && y < merged.y + merged.height
+                    });
+                    assert!(covered, "cell {x},{y} of {rect:?} is not covered");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn merging_leaves_a_small_set_alone() {
+        let mut rects = vec![Rect::new(0, 0, 4, 4), Rect::new(8, 8, 4, 4)];
+        merge_to_limit(&mut rects, 4);
         assert_eq!(rects.len(), 2);
-        // The two top rectangles share the cheapest union.
-        assert!(rects.contains(&Rect::new(0, 0, 30, 10)));
-        assert!(rects.contains(&Rect::new(0, 40, 10, 10)));
+        assert!(rects.contains(&Rect::new(0, 0, 4, 4)));
+        assert!(rects.contains(&Rect::new(8, 8, 4, 4)));
     }
 
     #[test]
