@@ -16,8 +16,8 @@ use crate::buffer::Surface;
 use crate::convert::{convert_cells, rgba_to_cells};
 use crate::decode::{Coverage, validate_region_ops};
 use crate::detect::{
-    ChangeMap, Span, TILE, bounding_box, make_disjoint, merge_to_limit, rects_from_map, row_spans,
-    shrink_all,
+    ChangeMap, Span, TILE, bounding_box, is_stale, make_disjoint, merge_to_limit, rects_from_map,
+    row_spans, shrink_all,
 };
 use crate::error::CodecError;
 use crate::format::DELTA_REFRESH_CELLS;
@@ -844,15 +844,20 @@ impl ScreenStreamEncoder {
             &mut self.visited,
             &mut self.rects,
         );
-        shrink_all(workspace, base_buffer, &mut self.rects);
+        // The rows the fused pass kept in its scratch are skipped by the
+        // shrink: they hold no changed cell, and the workspace's copy of them
+        // is not the frame's, so comparing them would only enlarge the
+        // rectangle.
+        shrink_all(workspace, base_buffer, &mut self.rects, &self.stale_rows);
         if self.rects.len() > MAX_REGIONS_PER_UPDATE {
             merge_to_limit(&mut self.rects, MAX_REGIONS_PER_UPDATE);
             if !make_disjoint(&mut self.rects) {
                 collapse_to_bounding_box(&mut self.rects);
             }
-            shrink_all(workspace, base_buffer, &mut self.rects);
+            shrink_all(workspace, base_buffer, &mut self.rects, &self.stale_rows);
             if self.rects.len() > MAX_REGIONS_PER_UPDATE {
                 collapse_to_bounding_box(&mut self.rects);
+                shrink_all(workspace, base_buffer, &mut self.rects, &self.stale_rows);
             }
         }
         let spans_elapsed = detect_started.elapsed();
@@ -1163,11 +1168,11 @@ fn repair_stale_rows(
     for rect in rects {
         for y in rect.y..rect.y + rect.height {
             let index = y as usize;
-            let word = index / 64;
-            let bit = 1_u64 << (index % 64);
-            if stale[word] & bit == 0 {
+            if !is_stale(stale, y) {
                 continue;
             }
+            let word = index / 64;
+            let bit = 1_u64 << (index % 64);
             let start = index * row_bytes;
             convert_cells(&frame.rgba[start..start + row_bytes], workspace.row_mut(y));
             stale[word] &= !bit;

@@ -407,12 +407,18 @@ fn scattered_blocks_are_progressive_within_the_frame_cap() {
     }
     let mut frames = 0_u32;
     let mut id = 2_u64;
+    let mut bytes = Vec::new();
+    let mut regions = Vec::new();
+    let mut sent = Vec::new();
     loop {
         let Some(next) = encode_frame_opt(&mut encoder, &frame, id) else {
             break;
         };
         id += 1;
         frames += 1;
+        bytes.push(next.payload_bytes());
+        regions.push(next.regions.len());
+        sent.push(next.sent_cells);
         assert!(next.regions.len() <= MAX_REGIONS_PER_UPDATE);
         assert!(next.payload_bytes() <= NOISE_FRAME_MAX_BYTES);
         assert_frame_invariants(&next, "scattered");
@@ -423,7 +429,10 @@ fn scattered_blocks_are_progressive_within_the_frame_cap() {
             break;
         }
     }
-    println!("MEASURE scattered_135_blocks: frames={frames}");
+    println!(
+        "MEASURE scattered_135_blocks: frames={frames} bytes={bytes:?} regions={regions:?} \
+         sent={sent:?}"
+    );
     assert!(frames <= 8, "the noisy blocks converge in {frames} frames");
 }
 
@@ -537,21 +546,37 @@ fn reset_frame_fits_the_wire_budget_and_the_part_caps() {
     let budget = tessellio_core::RESET_PAYLOAD_BUDGET_BYTES;
     let mut sequential = f64::MAX;
     let mut parallel = f64::MAX;
+    let mut bands = Vec::new();
     for _ in 0..3 {
         let started = Instant::now();
-        let bands = tessellio_core::encode_bands(&buffer, 0, level, 1, budget).unwrap();
+        let encoded = tessellio_core::encode_bands(&buffer, 0, level, 1, budget).unwrap();
         sequential = sequential.min(started.elapsed().as_secs_f64());
-        assert!(!bands.is_empty());
+        assert!(!encoded.is_empty());
         let started = Instant::now();
-        let bands = tessellio_core::encode_bands(&buffer, 0, level, 8, budget).unwrap();
+        let encoded = tessellio_core::encode_bands(&buffer, 0, level, 8, budget).unwrap();
         parallel = parallel.min(started.elapsed().as_secs_f64());
-        assert!(!bands.is_empty());
+        assert!(!encoded.is_empty());
+        bands = encoded;
     }
     println!(
         "MEASURE reset_parallel: sequential_ms={:.2} parallel_ms={:.2} speedup={:.2}",
         sequential * 1000.0,
         parallel * 1000.0,
         sequential / parallel
+    );
+    // The wall of a parallel wave is its slowest band: one band's DEFLATE is
+    // one stream, and a stream cannot be split across workers.
+    let slowest = bands
+        .iter()
+        .max_by_key(|band| band.compress_ns)
+        .expect("a band");
+    println!(
+        "MEASURE reset_bands: count={} slowest_y={} slowest_pack_ms={:.2} \
+         slowest_compress_ms={:.2}",
+        bands.len(),
+        slowest.y,
+        slowest.pack_ns as f64 / 1_000_000.0,
+        slowest.compress_ns as f64 / 1_000_000.0
     );
     assert!(
         parallel < sequential * 0.75,

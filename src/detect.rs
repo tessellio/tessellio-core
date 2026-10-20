@@ -306,7 +306,17 @@ pub fn rects_from_map(
 /// Shrink one tile-aligned rectangle to the exact bounding box of the cells
 /// that differ between `current` and `reference`; `None` when none differ.
 ///
-pub fn shrink_rect(current: &Surface, reference: &Surface, rect: Rect) -> Option<Rect> {
+/// `stale` marks the rows the workspace still holds stale — the rows it did
+/// not convert because no tile of their band was dirty. A stale row holds no
+/// changed cell (it was compared against the reference and found equal), but
+/// the workspace's copy of it is not the frame's, so the comparison skips it:
+/// comparing it would enlarge the box instead of shrinking it.
+pub fn shrink_rect(
+    current: &Surface,
+    reference: &Surface,
+    rect: Rect,
+    stale: &[u64],
+) -> Option<Rect> {
     if rect.is_empty() || !rect.is_inside(current.width(), current.height()) {
         return None;
     }
@@ -317,6 +327,9 @@ pub fn shrink_rect(current: &Surface, reference: &Surface, rect: Rect) -> Option
     let mut min_y = u32::MAX;
     let mut max_y = 0_u32;
     for y in rect.y..rect.y + rect.height {
+        if is_stale(stale, y) {
+            continue;
+        }
         let a = &current.row(y)[x0..x1];
         let b = &reference.row(y)[x0..x1];
         let first = a.iter().zip(b).position(|(left, right)| left != right);
@@ -342,9 +355,24 @@ pub fn shrink_rect(current: &Surface, reference: &Surface, rect: Rect) -> Option
     ))
 }
 
+/// Whether the workspace still holds a stale copy of row `y`.
+///
+/// `stale` is a bitmask with one bit per row, 64 rows per word.
+pub fn is_stale(stale: &[u64], y: u32) -> bool {
+    let word = (y / 64) as usize;
+    match stale.get(word) {
+        Some(bits) => bits & (1_u64 << (y % 64)) != 0,
+        None => false,
+    }
+}
+
 /// Shrink every rectangle to its exact bounding box and drop empty ones.
-pub fn shrink_all(current: &Surface, reference: &Surface, rects: &mut Vec<Rect>) {
-    rects.retain_mut(|rect| match shrink_rect(current, reference, *rect) {
+///
+/// The rows the workspace still holds stale are skipped, so a rectangle is
+/// the box of the cells that changed and not of the cells the workspace
+/// happens to hold.
+pub fn shrink_all(current: &Surface, reference: &Surface, rects: &mut Vec<Rect>, stale: &[u64]) {
+    rects.retain_mut(|rect| match shrink_rect(current, reference, *rect, stale) {
         Some(shrunk) => {
             *rect = shrunk;
             true
@@ -668,11 +696,32 @@ mod tests {
                 reference.as_mut_u16()[y * 128 + x] = 1;
             }
         }
-        let shrunk = shrink_rect(&current, &reference, Rect::new(0, 0, 64, 64)).unwrap();
+        let shrunk = shrink_rect(&current, &reference, Rect::new(0, 0, 64, 64), &[]).unwrap();
         assert_eq!(shrunk, Rect::new(7, 5, 4, 4));
         let mut rects = vec![Rect::new(0, 0, 64, 64), Rect::new(64, 64, 64, 64)];
-        shrink_all(&current, &reference, &mut rects);
+        shrink_all(&current, &reference, &mut rects, &[]);
         assert_eq!(rects, vec![Rect::new(7, 5, 4, 4)]);
+    }
+
+    #[test]
+    fn shrinking_skips_the_rows_the_workspace_holds_stale() {
+        let mut reference = buffer(128, 128, 0);
+        reference.as_mut_u16()[5 * 128 + 7] = 1;
+        // The workspace still holds a stale copy of row 3: it differs from
+        // the reference, but it holds no changed cell.
+        let mut workspace = buffer(128, 128, 0);
+        workspace.as_mut_u16()[3 * 128] = 9;
+        let stale = vec![1_u64 << 3];
+        let rect = Rect::new(0, 0, 64, 64);
+        assert_eq!(
+            shrink_rect(&workspace, &reference, rect, &stale),
+            Some(Rect::new(7, 5, 1, 1))
+        );
+        // Without the stale row the same comparison sees the stale cell.
+        assert_eq!(
+            shrink_rect(&workspace, &reference, rect, &[]),
+            Some(Rect::new(0, 3, 8, 3))
+        );
     }
 
     #[test]
