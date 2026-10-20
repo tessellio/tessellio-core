@@ -29,6 +29,8 @@
 //! - [`decode`] — the decoder, the bounded op walk, and the surface oracle.
 //! - [`telemetry`] — what the codec measures, and how a caller collects it.
 //! - [`error`] — the codec's error vocabulary.
+//! - [`scene`] — the reference scenes the codec is measured on.
+//! - [`measured`] — the reference implementation's measured byte bounds.
 
 pub mod buffer;
 pub mod convert;
@@ -38,11 +40,16 @@ pub mod encode;
 pub mod error;
 pub mod format;
 pub mod frame;
+pub mod measured;
 pub mod ops;
 pub mod part;
 pub mod reference;
 pub mod reset;
+pub mod scene;
 pub mod telemetry;
+
+#[cfg(feature = "cli")]
+pub mod cli;
 
 pub use buffer::Surface;
 pub use convert::{cells_to_rgba, composite_pointer_in_place, rgba_to_cells};
