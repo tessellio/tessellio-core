@@ -33,7 +33,7 @@
 //! ```
 //!
 //! Large canvases carry a CRC32 and the canvas byte length instead of the full
-//! cell hex; at least forty cases carry full `pixels565`. The wire-cap case
+//! cell hex; at least forty cases carry full `cells565`. The wire-cap case
 //! (`payload` over `MAX_REGION_WIRE_BYTES`) lives in the unit suites rather than
 //! here: its 256 KiB payload would be 512 KiB of hex and consume half the corpus
 //! budget to test one `>` comparison.
@@ -72,7 +72,7 @@ use serde_json::{Value, json};
 const MIN_CASES: usize = 64;
 /// The corpus file's size budget.
 const MAX_BYTES: usize = 1024 * 1024;
-/// Cases that carry full `pixels565` (design floor).
+/// Cases that carry full `cells565` (design floor).
 const MIN_FULL_PIXEL_CASES: usize = 40;
 
 /// Lowercase hex of a byte string.
@@ -141,14 +141,14 @@ fn frame_json(
     update_base: u64,
     parts: Vec<Part>,
     canvas: &SurfaceCanvas,
-    full_pixels: bool,
+    full_cells: bool,
 ) -> Value {
     let update_bytes: u64 = parts
         .iter()
         .flat_map(|part| part.regions.iter())
         .map(|region| region.payload.len() as u64)
         .sum();
-    let expect = if full_pixels {
+    let expect = if full_cells {
         json!({ "cells565": hex_u16(canvas.cells()), "ack": true })
     } else {
         json!({
@@ -178,7 +178,7 @@ fn frame_json(
 }
 
 /// Encode a scripted scene into corpus frames.
-fn scene_case(steps: Vec<CapturedFrame>, full_pixels: bool) -> (Vec<Value>, usize) {
+fn scene_case(steps: Vec<CapturedFrame>, full_cells: bool) -> (Vec<Value>, usize) {
     let mut encoder = ScreenStreamEncoder::new(CodecConfig {
         delta_deflate_level: 6,
         reset_deflate_level: 3,
@@ -204,10 +204,10 @@ fn scene_case(steps: Vec<CapturedFrame>, full_pixels: bool) -> (Vec<Value>, usiz
             if index == 0 { 0 } else { index as u64 },
             parts,
             &canvas,
-            full_pixels,
+            full_cells,
         ));
     }
-    let full = if full_pixels { frames.len() } else { 0 };
+    let full = if full_cells { frames.len() } else { 0 };
     (frames, full)
 }
 
@@ -276,9 +276,9 @@ fn hand_built_delta_case(
                 height,
                 payload: payload.clone(),
             }],
-            changed_pixels: 0,
-            sent_pixels: 0,
-            backlog_pixels: 0,
+            changed_cells: 0,
+            sent_cells: 0,
+            backlog_cells: 0,
             reset_reasons: Default::default(),
         };
         canvas.apply(&frame).expect("hand-built frame applies");
@@ -389,7 +389,7 @@ fn scene_pair(seed: u32, width: u32, height: u32) -> (CapturedFrame, CapturedFra
 
 fn corpus() -> Value {
     let mut cases: Vec<Value> = Vec::new();
-    let mut full_pixels = 0_usize;
+    let mut full_cells = 0_usize;
 
     // -- resets, small enough to carry full cells -------------------------
     for (id, seed, size) in [
@@ -418,7 +418,7 @@ fn corpus() -> Value {
             office(size.0, size.1, seed)
         };
         let (frames, full) = scene_case(vec![frame], true);
-        full_pixels += full;
+        full_cells += full;
         cases.push(json!({ "id": id, "mode": "roundtrip", "frames": frames }));
     }
 
@@ -533,7 +533,7 @@ fn corpus() -> Value {
         draw_cursor(&mut moved, hot.0 + shift, hot.1);
         let full = size.0 <= 96 && size.1 <= 64;
         let (frames, count) = scene_case(vec![base, moved], full);
-        full_pixels += count;
+        full_cells += count;
         cases.push(json!({ "id": id, "mode": "roundtrip", "frames": frames }));
     }
 
@@ -585,7 +585,7 @@ fn corpus() -> Value {
             _ => {}
         }
         let (frames, count) = scene_case(vec![base, changed], full);
-        full_pixels += count;
+        full_cells += count;
         cases.push(json!({ "id": id, "mode": "roundtrip", "frames": frames }));
     }
 
@@ -615,14 +615,14 @@ fn corpus() -> Value {
         let mut changed = base.clone();
         mutate(&mut changed);
         let (frames, count) = scene_case(vec![base, changed], true);
-        full_pixels += count;
+        full_cells += count;
         cases.push(json!({ "id": id, "mode": "roundtrip", "frames": frames }));
     }
 
     // -- the idle frame ----------------------------------------------------
     let base = office(64, 48, 51);
     let (frames, count) = scene_case(vec![base.clone(), base], true);
-    full_pixels += count;
+    full_cells += count;
     cases.push(json!({ "id": "chained-empty-idle", "mode": "roundtrip", "frames": frames }));
 
     // -- progressive refresh: 128×128 noise at a 2048 px budget ------------
@@ -735,9 +735,9 @@ fn corpus() -> Value {
             height: frame.height,
             codec: Codec::Tessellio,
             regions: assembled.regions,
-            changed_pixels: 0,
-            sent_pixels: 0,
-            backlog_pixels: 0,
+            changed_cells: 0,
+            sent_cells: 0,
+            backlog_cells: 0,
             reset_reasons: Default::default(),
         };
         let mut canvas = SurfaceCanvas::new();
@@ -1075,8 +1075,8 @@ fn corpus() -> Value {
         cases.len()
     );
     assert!(
-        full_pixels >= MIN_FULL_PIXEL_CASES,
-        "only {full_pixels} cases carry full pixels565"
+        full_cells >= MIN_FULL_PIXEL_CASES,
+        "only {full_cells} cases carry full cells565"
     );
 
     json!({

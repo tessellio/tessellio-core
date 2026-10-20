@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn masked_writes_copy_only_the_written_pixels() {
+    fn masked_writes_copy_only_the_written_cells() {
         let mut dest = buffer(4, 1, 0);
         let source = buffer(4, 1, 7);
         apply_writes(&mut dest, &source, &[WriteSpan::new(1, 2)]).unwrap();

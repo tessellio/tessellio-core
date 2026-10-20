@@ -430,9 +430,9 @@ mod tests {
             height: 48,
             codec: Codec::Tessellio,
             regions,
-            changed_pixels: 0,
-            sent_pixels: 0,
-            backlog_pixels: 0,
+            changed_cells: 0,
+            sent_cells: 0,
+            backlog_cells: 0,
             reset_reasons: Default::default(),
         }
     }

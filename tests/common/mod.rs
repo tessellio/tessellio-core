@@ -403,7 +403,7 @@ pub fn update_bytes(frame: &EncodedUpdate) -> usize {
 }
 
 /// Cell count of all regions of a frame.
-pub fn region_pixels(frame: &EncodedUpdate) -> u64 {
+pub fn region_cells(frame: &EncodedUpdate) -> u64 {
     frame
         .regions
         .iter()

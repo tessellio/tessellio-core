@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::buffer::Surface;
-use crate::convert::{convert_pixels, rgba_to_cells};
+use crate::convert::{convert_cells, rgba_to_cells};
 use crate::decode::{Coverage, validate_region_ops};
 use crate::detect::{
     ChangeMap, Span, bounding_box, make_disjoint, merge_to_limit, rects_from_map, row_spans,
@@ -125,11 +125,11 @@ pub struct EncodedUpdate {
     /// Encoded regions, ascending by `(y, x)`.
     pub regions: Vec<Region>,
     /// Exact changed cells vs the base (the band area on a reset frame).
-    pub changed_pixels: u64,
+    pub changed_cells: u64,
     /// Cells this frame carries.
-    pub sent_pixels: u64,
+    pub sent_cells: u64,
     /// Cells still differing from the reference after this frame.
-    pub backlog_pixels: u64,
+    pub backlog_cells: u64,
     /// Non-empty only on reset frames.
     pub reset_reasons: ResetReasons,
 }
@@ -175,9 +175,9 @@ pub struct PlannedUpdate {
     regions: Vec<Region>,
     writes: Vec<WriteSpan>,
     undo: Vec<UndoSegment>,
-    changed_pixels: u64,
-    sent_pixels: u64,
-    backlog_pixels: u64,
+    changed_cells: u64,
+    sent_cells: u64,
+    backlog_cells: u64,
     reset_reasons: ResetReasons,
     update: UpdateTarget,
     width: u32,
@@ -193,9 +193,9 @@ impl std::fmt::Debug for PlannedUpdate {
             .field("height", &self.height)
             .field("regions", &self.regions.len())
             .field("writes", &self.writes.len())
-            .field("changed_pixels", &self.changed_pixels)
-            .field("sent_pixels", &self.sent_pixels)
-            .field("backlog_pixels", &self.backlog_pixels)
+            .field("changed_cells", &self.changed_cells)
+            .field("sent_cells", &self.sent_cells)
+            .field("backlog_cells", &self.backlog_cells)
             .field("reset_reasons", &self.reset_reasons)
             .finish()
     }
@@ -385,9 +385,9 @@ impl ScreenStreamEncoder {
             regions,
             writes,
             undo,
-            changed_pixels,
-            sent_pixels,
-            backlog_pixels,
+            changed_cells,
+            sent_cells,
+            backlog_cells,
             reset_reasons,
             update,
             width,
@@ -454,9 +454,9 @@ impl ScreenStreamEncoder {
             height,
             codec: Codec::Tessellio,
             regions,
-            changed_pixels,
-            sent_pixels,
-            backlog_pixels,
+            changed_cells,
+            sent_cells,
+            backlog_cells,
             reset_reasons,
         }
     }
@@ -486,7 +486,7 @@ impl ScreenStreamEncoder {
     ///
     /// This is the inspection surface the model tests assert INV-R against; no
     /// production path reads the reference back.
-    pub fn reference_pixels(&self) -> &[u16] {
+    pub fn reference_cells(&self) -> &[u16] {
         match self.reference.as_ref() {
             Some(reference) => reference.as_u16(),
             None => &[],
@@ -576,7 +576,7 @@ impl ScreenStreamEncoder {
         for y in 0..frame.height {
             let start = y as usize * row_bytes;
             let started = Instant::now();
-            convert_pixels(
+            convert_cells(
                 &frame.rgba[start..start + row_bytes],
                 &mut self.row_scratch[..width],
             );
@@ -695,11 +695,11 @@ impl ScreenStreamEncoder {
         let mut regions = Vec::with_capacity(bands.len());
         let mut writes = std::mem::take(&mut self.writes);
         writes.clear();
-        let mut sent_pixels = 0_u64;
+        let mut sent_cells = 0_u64;
         let mut covered_to = from_y;
         for band in bands {
             let rows = u64::from(band.height);
-            sent_pixels += rows * u64::from(width);
+            sent_cells += rows * u64::from(width);
             covered_to = band.y + band.height;
             writes.push(WriteSpan::new(band.y * width, band.height * width));
             regions.push(Region {
@@ -726,9 +726,9 @@ impl ScreenStreamEncoder {
             regions,
             writes,
             undo: Vec::new(),
-            changed_pixels: sent_pixels,
-            sent_pixels,
-            backlog_pixels: 0,
+            changed_cells: sent_cells,
+            sent_cells,
+            backlog_cells: 0,
             reset_reasons,
             update: if fresh {
                 UpdateTarget::Fresh
@@ -785,9 +785,9 @@ impl ScreenStreamEncoder {
                 regions: Vec::new(),
                 writes,
                 undo: Vec::new(),
-                changed_pixels: 0,
-                sent_pixels: 0,
-                backlog_pixels: 0,
+                changed_cells: 0,
+                sent_cells: 0,
+                backlog_cells: 0,
                 reset_reasons: ResetReasons::none(),
                 update: match base {
                     DeltaBase::Reference => UpdateTarget::Masked,
@@ -831,7 +831,7 @@ impl ScreenStreamEncoder {
         // Steps F–G — spans, op build, refresh budget.
         let pack_started = Instant::now();
         let budget_px = u64::from(self.config.refresh_cells);
-        let mut changed_pixels = 0_u64;
+        let mut changed_cells = 0_u64;
         let mut differing_sent = 0_u64;
         let mut accepted_ops = 0_usize;
         let mut stopped = false;
@@ -863,7 +863,7 @@ impl ScreenStreamEncoder {
                     rect.width,
                     &mut self.spans,
                 );
-                changed_pixels += changed;
+                changed_cells += changed;
                 if stopped || self.spans.is_empty() {
                     continue;
                 }
@@ -964,8 +964,8 @@ impl ScreenStreamEncoder {
             return Ok(None);
         }
 
-        let backlog_pixels = if stopped {
-            changed_pixels.saturating_sub(differing_sent)
+        let backlog_cells = if stopped {
+            changed_cells.saturating_sub(differing_sent)
         } else {
             0
         };
@@ -976,9 +976,9 @@ impl ScreenStreamEncoder {
             regions,
             writes,
             undo,
-            changed_pixels,
-            sent_pixels: differing_sent,
-            backlog_pixels,
+            changed_cells,
+            sent_cells: differing_sent,
+            backlog_cells,
             reset_reasons: ResetReasons::none(),
             update: match base {
                 DeltaBase::Reference => UpdateTarget::Masked,
@@ -1025,7 +1025,7 @@ fn repair_stale_rows(
                 continue;
             }
             let start = index * row_bytes;
-            convert_pixels(&frame.rgba[start..start + row_bytes], workspace.row_mut(y));
+            convert_cells(&frame.rgba[start..start + row_bytes], workspace.row_mut(y));
             stale[word] &= !bit;
         }
     }
@@ -1186,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cursor_move_sends_only_the_changed_pixels() {
+    fn a_cursor_move_sends_only_the_changed_cells() {
         let mut encoder = new_encoder();
         let mut frame = office(640, 480, 3);
         fill_rect(&mut frame, 100, 100, 14, 22, [255, 255, 255, 255]);
@@ -1198,12 +1198,12 @@ mod tests {
         assert_eq!(planned.update_base, 1);
         let encoded = encoder.commit(planned, 2);
         assert!(!encoded.is_reset());
-        assert!(encoded.changed_pixels > 0);
+        assert!(encoded.changed_cells > 0);
         assert_eq!(
-            encoded.changed_pixels, encoded.sent_pixels,
+            encoded.changed_cells, encoded.sent_cells,
             "exact cells: nothing but changed cells is carried"
         );
-        assert!(encoded.changed_pixels < 400, "{}", encoded.changed_pixels);
+        assert!(encoded.changed_cells < 400, "{}", encoded.changed_cells);
         assert!(encoded.payload_bytes() < 800, "{}", encoded.payload_bytes());
     }
 
@@ -1243,7 +1243,7 @@ mod tests {
     }
 
     #[test]
-    fn rebase_decodes_to_the_same_pixels_as_a_reset_frame() {
+    fn rebase_decodes_to_the_same_cells_as_a_reset_frame() {
         let mut encoder = new_encoder();
         let mut receiver = SurfaceCanvas::new();
         let mut frame = office(96, 64, 11);
@@ -1391,22 +1391,19 @@ mod tests {
         let planned = encoder.encode(&frame).unwrap().unwrap();
         let first = encoder.commit(planned, 2);
         assert!(
-            first.sent_pixels <= DELTA_REFRESH_MIN_CELLS + 240,
+            first.sent_cells <= DELTA_REFRESH_MIN_CELLS + 240,
             "sent {}",
-            first.sent_pixels
+            first.sent_cells
         );
-        assert!(first.changed_pixels > first.sent_pixels);
-        assert_eq!(
-            first.sent_pixels + first.backlog_pixels,
-            first.changed_pixels
-        );
+        assert!(first.changed_cells > first.sent_cells);
+        assert_eq!(first.sent_cells + first.backlog_cells, first.changed_cells);
         // A second frame makes progress again and stays inside the budget
         // plus one row (the documented §9.2 bound).
         let planned = encoder.encode(&frame).unwrap().unwrap();
         let second = encoder.commit(planned, 3);
-        assert!(second.sent_pixels > 0);
-        assert!(second.sent_pixels <= DELTA_REFRESH_MIN_CELLS + 240);
-        assert!(second.backlog_pixels < first.backlog_pixels);
+        assert!(second.sent_cells > 0);
+        assert!(second.sent_cells <= DELTA_REFRESH_MIN_CELLS + 240);
+        assert!(second.backlog_cells < first.backlog_cells);
     }
 
     #[test]

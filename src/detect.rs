@@ -40,7 +40,7 @@ pub struct ChangeMap {
     tiles_y: u32,
     bits: Vec<u64>,
     dirty_tiles: u32,
-    upper_bound_pixels: u64,
+    upper_bound_cells: u64,
 }
 
 impl ChangeMap {
@@ -60,7 +60,7 @@ impl ChangeMap {
         self.bits.clear();
         self.bits.resize(tile_count.div_ceil(64), 0);
         self.dirty_tiles = 0;
-        self.upper_bound_pixels = 0;
+        self.upper_bound_cells = 0;
 
         let reference =
             reference.filter(|buffer| buffer.matches(current.width(), current.height()));
@@ -69,7 +69,7 @@ impl ChangeMap {
                 self.bits[index / 64] |= 1 << (index % 64);
                 self.dirty_tiles += 1;
             }
-            self.upper_bound_pixels = current.cell_count() as u64;
+            self.upper_bound_cells = current.cell_count() as u64;
             return;
         };
 
@@ -92,7 +92,7 @@ impl ChangeMap {
                     let index = (ty * self.tiles_x + tx) as usize;
                     self.bits[index / 64] |= 1 << (index % 64);
                     self.dirty_tiles += 1;
-                    self.upper_bound_pixels += u64::from(x1 - x0) * u64::from(y1 - y0);
+                    self.upper_bound_cells += u64::from(x1 - x0) * u64::from(y1 - y0);
                 }
             }
         }
@@ -118,7 +118,7 @@ impl ChangeMap {
         self.bits.clear();
         self.bits.resize(tile_count.div_ceil(64), 0);
         self.dirty_tiles = 0;
-        self.upper_bound_pixels = 0;
+        self.upper_bound_cells = 0;
         let reference =
             reference.filter(|buffer| buffer.matches(current.width(), current.height()));
         let Some(reference) = reference else {
@@ -126,7 +126,7 @@ impl ChangeMap {
                 self.bits[index / 64] |= 1 << (index % 64);
                 self.dirty_tiles += 1;
             }
-            self.upper_bound_pixels = current.cell_count() as u64;
+            self.upper_bound_cells = current.cell_count() as u64;
             return None;
         };
         Some(reference)
@@ -168,7 +168,7 @@ impl ChangeMap {
             if current_row[x0 as usize..x1 as usize] != reference_row[x0 as usize..x1 as usize] {
                 self.bits[index / 64] |= 1 << (index % 64);
                 self.dirty_tiles += 1;
-                self.upper_bound_pixels += u64::from(x1 - x0) * u64::from(band_rows);
+                self.upper_bound_cells += u64::from(x1 - x0) * u64::from(band_rows);
             }
         }
         true
@@ -209,8 +209,8 @@ impl ChangeMap {
     }
 
     /// Upper bound on the changed cell count (the dirty tile area).
-    pub fn upper_bound_pixels(&self) -> u64 {
-        self.upper_bound_pixels
+    pub fn upper_bound_cells(&self) -> u64 {
+        self.upper_bound_cells
     }
 
     /// Tile grid width.
@@ -516,13 +516,13 @@ mod tests {
         let mut map = ChangeMap::new();
         map.detect(&current, Some(&reference));
         assert!(map.is_empty());
-        assert_eq!(map.upper_bound_pixels(), 0);
+        assert_eq!(map.upper_bound_cells(), 0);
         assert_eq!(map.tiles_x(), 4);
         assert_eq!(map.tiles_y(), 3);
     }
 
     #[test]
-    fn one_changed_pixel_dirties_exactly_one_tile() {
+    fn one_changed_cell_dirties_exactly_one_tile() {
         let current = buffer(200, 130, 0);
         let mut reference = buffer(200, 130, 0);
         reference.as_mut_u16()[0] = 1;
@@ -531,7 +531,7 @@ mod tests {
         assert_eq!(map.dirty_tiles(), 1);
         assert!(map.is_dirty(0, 0));
         assert!(!map.is_dirty(1, 0));
-        assert_eq!(map.upper_bound_pixels(), 64 * 64);
+        assert_eq!(map.upper_bound_cells(), 64 * 64);
     }
 
     #[test]
@@ -540,7 +540,7 @@ mod tests {
         let mut map = ChangeMap::new();
         map.detect(&current, None);
         assert_eq!(map.dirty_tiles(), 2);
-        assert_eq!(map.upper_bound_pixels(), 100 * 50);
+        assert_eq!(map.upper_bound_cells(), 100 * 50);
         let mismatched = buffer(10, 10, 0);
         map.detect(&current, Some(&mismatched));
         assert_eq!(map.dirty_tiles(), 2);
@@ -578,7 +578,7 @@ mod tests {
         // strictest check is that the maps agree.
         assert!(kept > 0);
         assert_eq!(block.dirty_tiles(), whole.dirty_tiles());
-        assert_eq!(block.upper_bound_pixels(), whole.upper_bound_pixels());
+        assert_eq!(block.upper_bound_cells(), whole.upper_bound_cells());
         for ty in 0..whole.tiles_y() {
             for tx in 0..whole.tiles_x() {
                 assert_eq!(
@@ -593,7 +593,7 @@ mod tests {
         let mut block = ChangeMap::new();
         assert!(block.prepare(&current, None).is_none());
         assert_eq!(block.dirty_tiles(), whole.tiles_x() * whole.tiles_y());
-        assert_eq!(block.upper_bound_pixels(), u64::from(200_u32 * 130));
+        assert_eq!(block.upper_bound_cells(), u64::from(200_u32 * 130));
     }
     #[test]
     fn greedy_rectangles_cover_dirty_tiles_disjointly() {
@@ -661,7 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn overlap_removal_keeps_pixels_and_disjointness() {
+    fn overlap_removal_keeps_cells_and_disjointness() {
         let mut rects = vec![Rect::new(0, 0, 10, 10), Rect::new(5, 5, 10, 10)];
         assert!(make_disjoint(&mut rects));
         for (index, rect) in rects.iter().enumerate() {
@@ -682,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn spans_are_maximal_runs_of_changed_pixels() {
+    fn spans_are_maximal_runs_of_changed_cells() {
         let mut current = buffer(16, 1, 0);
         let reference = buffer(16, 1, 0);
         current.as_mut_u16()[2] = 1;

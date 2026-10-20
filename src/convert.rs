@@ -29,7 +29,7 @@ pub(crate) fn pack565(word: u32) -> u16 {
 /// Four cells are packed per iteration so LLVM can vectorize the loop; the
 /// reduction and every value it produces are identical to the per-cell form.
 #[inline]
-pub(crate) fn convert_pixels(source: &[u8], target: &mut [u16]) {
+pub(crate) fn convert_cells(source: &[u8], target: &mut [u16]) {
     debug_assert_eq!(source.len(), target.len() * 4);
     let (cells, _rest) = source.as_chunks::<4>();
     let mut slots = target.chunks_exact_mut(4);
@@ -68,7 +68,7 @@ pub fn rgba_to_cells(
             rgba.len()
         )));
     }
-    convert_pixels(rgba, out.as_mut_u16());
+    convert_cells(rgba, out.as_mut_u16());
     Ok(())
 }
 

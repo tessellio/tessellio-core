@@ -112,9 +112,9 @@ fn assembled_frame(assembled: AssembledUpdate) -> EncodedUpdate {
         height: assembled.height,
         codec: Codec::Tessellio,
         regions: assembled.regions,
-        changed_pixels: 0,
-        sent_pixels: 0,
-        backlog_pixels: 0,
+        changed_cells: 0,
+        sent_cells: 0,
+        backlog_cells: 0,
         reset_reasons: Default::default(),
     }
 }
@@ -166,9 +166,9 @@ fn v1_empty_delta_advances_the_canvas_without_painting() {
             height: 4,
             codec: Codec::Tessellio,
             regions: Vec::new(),
-            changed_pixels: 0,
-            sent_pixels: 0,
-            backlog_pixels: 0,
+            changed_cells: 0,
+            sent_cells: 0,
+            backlog_cells: 0,
             reset_reasons: Default::default(),
         })
         .expect("the anchor frame applies");
@@ -195,7 +195,7 @@ const V2_OPS: [u8; 17] = [
 const V2_PAYLOAD_HEX: &str = "011100eeff010000020000040000f8e0071f00ffff00";
 
 #[test]
-fn v2_literal_run_hex_to_pixels_and_back() {
+fn v2_literal_run_hex_to_cells_and_back() {
     let payload = unhex(V2_PAYLOAD_HEX);
     assert_eq!(payload.len(), 22);
     assert_eq!(payload, envelope(&V2_OPS), "the documented envelope");
@@ -254,7 +254,7 @@ const V3_PAYLOAD_HEX: &str = "011f00e0ff\
 00";
 
 #[test]
-fn v3_full_coverage_fills_hex_to_pixels_and_back() {
+fn v3_full_coverage_fills_hex_to_cells_and_back() {
     let payload = unhex(V3_PAYLOAD_HEX);
     assert_eq!(payload.len(), 36);
     assert_eq!(payload, envelope(&V3_OPS));
@@ -345,7 +345,7 @@ const V4_B_OPS: [u8; 11] = [
 ];
 
 #[test]
-fn v4_multi_region_sparse_delta_hex_to_pixels_and_back() {
+fn v4_multi_region_sparse_delta_hex_to_cells_and_back() {
     let a_payload = stored(&V4_A_OPS);
     let b_payload = stored(&V4_B_OPS);
     assert_eq!(a_payload.len(), 30);
@@ -438,7 +438,7 @@ const V5_CHUNK0_HEX: &str = "010b00f4ff010000020000010000f800";
 const V5_CHUNK1_HEX: &str = "010b00f4ff0100000200000100e00700";
 
 #[test]
-fn v5_parted_frame_hex_to_pixels_and_back() {
+fn v5_parted_frame_hex_to_cells_and_back() {
     let part0_payload = unhex(V5_CHUNK0_HEX);
     let part1_payload = unhex(V5_CHUNK1_HEX);
     assert_eq!(part0_payload.len(), 16);
@@ -641,9 +641,9 @@ fn the_canvas_rejects_a_frame_whose_base_it_does_not_hold() {
         height: 4,
         codec: Codec::Tessellio,
         regions: Vec::new(),
-        changed_pixels: 0,
-        sent_pixels: 0,
-        backlog_pixels: 0,
+        changed_cells: 0,
+        sent_cells: 0,
+        backlog_cells: 0,
         reset_reasons: Default::default(),
     };
     // Nothing applied yet: a delta with any base is refused.
@@ -665,9 +665,9 @@ fn the_canvas_discards_a_stale_delta_without_a_resync() {
         height: 4,
         codec: Codec::Tessellio,
         regions: region.into_iter().collect(),
-        changed_pixels: 0,
-        sent_pixels: 0,
-        backlog_pixels: 0,
+        changed_cells: 0,
+        sent_cells: 0,
+        backlog_cells: 0,
         reset_reasons: Default::default(),
     };
     let mut canvas = SurfaceCanvas::new();

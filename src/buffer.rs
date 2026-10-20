@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn fill_and_blit_write_exact_pixels() {
+    fn fill_and_blit_write_exact_cells() {
         let mut buffer = Surface::new(4, 2).unwrap();
         buffer.fill(0x1234);
         assert!(buffer.as_u16().iter().all(|value| *value == 0x1234));

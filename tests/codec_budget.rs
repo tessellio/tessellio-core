@@ -92,9 +92,9 @@ fn measure(scenario: &str, frame: &tessellio_core::EncodedUpdate, extra: &str) {
     println!(
         "MEASURE {scenario}: bytes={} changed_px={} sent_px={} backlog_px={} regions={} kind={} {extra}",
         frame.payload_bytes(),
-        frame.changed_pixels,
-        frame.sent_pixels,
-        frame.backlog_pixels,
+        frame.changed_cells,
+        frame.sent_cells,
+        frame.backlog_cells,
         frame.regions.len(),
         frame.kind().as_str(),
     );
@@ -139,19 +139,19 @@ fn assert_frame_invariants(frame: &tessellio_core::EncodedUpdate, label: &str) {
     // Exact change detection: a frame never carries more cells than changed,
     // and the over-send bound is therefore always satisfied.
     assert!(
-        frame.sent_pixels <= frame.changed_pixels,
+        frame.sent_cells <= frame.changed_cells,
         "{label}: sent {} > changed {}",
-        frame.sent_pixels,
-        frame.changed_pixels
+        frame.sent_cells,
+        frame.changed_cells
     );
     assert!(
-        frame.sent_pixels <= 2 * frame.changed_pixels,
+        frame.sent_cells <= 2 * frame.changed_cells,
         "{label}: over-send above 2x"
     );
 }
 
 #[test]
-fn cursor_one_pixel_move_stays_within_budget() {
+fn cursor_one_cell_move_stays_within_budget() {
     // Horizontal: the arrow's left and right edges move one column each.
     let mut encoder = ScreenStreamEncoder::new(codec_config());
     let mut frame = office(1920, 1080, 11);
@@ -166,7 +166,7 @@ fn cursor_one_pixel_move_stays_within_budget() {
         "horizontal 1 px pointer move: {} bytes",
         horizontal.payload_bytes()
     );
-    assert_eq!(horizontal.changed_pixels, horizontal.sent_pixels);
+    assert_eq!(horizontal.changed_cells, horizontal.sent_cells);
     // The receiver paints exactly the new content.
     apply_frame(&mut canvas, &horizontal).unwrap();
     assert_eq!(
@@ -196,7 +196,7 @@ fn cursor_one_pixel_move_stays_within_budget() {
 }
 
 #[test]
-fn cursor_sixteen_pixel_move_stays_within_budget() {
+fn cursor_sixteen_cell_move_stays_within_budget() {
     let mut encoder = ScreenStreamEncoder::new(codec_config());
     let mut frame = office(1920, 1080, 13);
     draw_cursor(&mut frame, 900, 600);
@@ -244,7 +244,7 @@ fn typing_block_stays_within_budget() {
         "typing 600×40: {} bytes",
         typed.payload_bytes()
     );
-    assert_eq!(typed.changed_pixels, typed.sent_pixels);
+    assert_eq!(typed.changed_cells, typed.sent_cells);
     assert_frame_invariants(&typed, "typing");
 }
 
@@ -329,9 +329,9 @@ fn noise_converges_within_two_frames_and_the_frame_cap() {
             next.payload_bytes()
         );
         assert!(
-            next.sent_pixels <= u64::from(DELTA_REFRESH_CELLS) + 640,
+            next.sent_cells <= u64::from(DELTA_REFRESH_CELLS) + 640,
             "noise frame {frames} exceeded the refresh budget: {} px",
-            next.sent_pixels
+            next.sent_cells
         );
         assert_frame_invariants(&next, "noise");
         if frames > 16 {
@@ -364,9 +364,9 @@ fn noise_converges_within_eight_frames_at_the_congested_floor() {
         id += 1;
         frames += 1;
         assert!(
-            next.sent_pixels <= 32_768 + 640,
+            next.sent_cells <= 32_768 + 640,
             "frame {frames}: {} px",
-            next.sent_pixels
+            next.sent_cells
         );
         assert!(next.payload_bytes() <= NOISE_FRAME_MAX_BYTES);
         if frames > 12 {
@@ -623,7 +623,7 @@ fn the_weighted_interactive_mix_meets_the_target() {
 }
 
 #[test]
-fn every_frame_holds_the_documented_pixel_bound() {
+fn every_frame_holds_the_documented_cell_bound() {
     // The refresh budget is a per-frame bound: no frame may carry more than the
     // budget plus one row, whatever the scenario.
     let mut encoder = ScreenStreamEncoder::new(codec_config());
@@ -634,9 +634,9 @@ fn every_frame_holds_the_documented_pixel_bound() {
         if let Some(next) = encode_frame_opt(&mut encoder, &frame, step as u64 + 2) {
             let budget = u64::from(DELTA_REFRESH_CELLS).max(DELTA_REFRESH_MIN_CELLS);
             assert!(
-                next.sent_pixels <= budget + 400,
+                next.sent_cells <= budget + 400,
                 "step {step}: {} px",
-                next.sent_pixels
+                next.sent_cells
             );
             assert!(next.payload_bytes() <= NOISE_FRAME_MAX_BYTES);
             assert_frame_invariants(&next, "cell bound");

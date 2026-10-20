@@ -191,7 +191,7 @@ pub fn emit_full_row(out: &mut Vec<u8>, row: u32, values: &[u16]) {
 /// Append ops for one row's changed spans, in ascending span order.
 ///
 /// `values` is the region's row; span coordinates are region-local. Returns the
-/// number of cells written. When `max_pixels` is set, the output stops at that
+/// number of cells written. When `max_cells` is set, the output stops at that
 /// many cells (the delta budget's progress guarantee) and no partial op is
 /// left behind.
 pub fn emit_spans(
@@ -199,18 +199,18 @@ pub fn emit_spans(
     row: u32,
     values: &[u16],
     spans: &[Span],
-    max_pixels: Option<u64>,
+    max_cells: Option<u64>,
 ) -> u64 {
     let mut emitted = 0_u64;
     let mut wrote_row = false;
     for span in spans {
-        if let Some(limit) = max_pixels
+        if let Some(limit) = max_cells
             && emitted >= limit
         {
             break;
         }
         let mut len = span.len;
-        if let Some(limit) = max_pixels {
+        if let Some(limit) = max_cells {
             let remaining = limit - emitted;
             if u64::from(len) > remaining {
                 len = remaining as u32;
@@ -232,22 +232,22 @@ pub fn emit_spans(
     emitted
 }
 
-/// Truncate a span list at `max_pixels`, writing the result into `out`.
+/// Truncate a span list at `max_cells`, writing the result into `out`.
 ///
 /// Used by the delta budget's progress guarantee: a frame whose budget is
 /// exhausted before its first row still carries the first
 /// [`DELTA_REFRESH_MIN_CELLS`](crate::format::DELTA_REFRESH_MIN_CELLS)
 /// cells of that row.
-pub fn truncate_spans(spans: &[Span], max_pixels: u64, out: &mut Vec<Span>) -> u64 {
+pub fn truncate_spans(spans: &[Span], max_cells: u64, out: &mut Vec<Span>) -> u64 {
     out.clear();
     let mut emitted = 0_u64;
     for span in spans {
-        if emitted >= max_pixels {
+        if emitted >= max_cells {
             break;
         }
         let mut len = u64::from(span.len);
-        if emitted + len > max_pixels {
-            len = max_pixels - emitted;
+        if emitted + len > max_cells {
+            len = max_cells - emitted;
         }
         out.push(Span {
             x: span.x,
@@ -316,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn exactly_fill_min_run_pixels_become_a_fill() {
+    fn exactly_fill_min_run_cells_become_a_fill() {
         let values = vec![5_u16; FILL_MIN_RUN as usize];
         let mut out = Vec::new();
         emit_values(&mut out, 0, &values);
@@ -342,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn truncation_stops_at_the_pixel_limit() {
+    fn truncation_stops_at_the_cell_limit() {
         let values: Vec<u16> = (0..16).collect();
         let spans = vec![Span { x: 0, len: 10 }, Span { x: 12, len: 4 }];
         let mut out = Vec::new();
@@ -358,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn full_rows_cover_every_pixel() {
+    fn full_rows_cover_every_cell() {
         let values = vec![42_u16; 6];
         let mut out = Vec::new();
         emit_full_row(&mut out, 0, &values);

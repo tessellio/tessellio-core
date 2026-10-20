@@ -80,7 +80,7 @@ proptest! {
 
     /// §9.2.1 — round trip: changed cells exact, reference equals the canvas.
     #[test]
-    fn round_trip_reproduces_every_changed_pixel(
+    fn round_trip_reproduces_every_changed_cell(
         (width, height, base) in content_strategy(),
         changes in proptest::collection::vec((0_u32..64, 0_u32..64, 0_u16..=0xffff), 0..6),
     ) {
@@ -95,7 +95,7 @@ proptest! {
         let reset = encode_frame(&mut encoder, &base_frame, 1);
         prop_assert_eq!(reset.update_base, 0);
         canvas.apply(&reset).expect("self-contained applies");
-        prop_assert_eq!(canvas.cells(), encoder.reference_pixels());
+        prop_assert_eq!(canvas.cells(), encoder.reference_cells());
         prop_assert_eq!(canvas.cells(), expect565(&base_frame));
 
         let mut current = base.clone();
@@ -109,13 +109,13 @@ proptest! {
             canvas.apply(&encoded).expect("chained applies");
             // Every cell the frame carried is a changed cell, and the decoded
             // canvas matches the source at wire fidelity.
-            prop_assert!(encoded.sent_pixels <= encoded.changed_pixels.max(encoded.sent_pixels));
+            prop_assert!(encoded.sent_cells <= encoded.changed_cells.max(encoded.sent_cells));
             for region in &encoded.regions {
                 prop_assert!(region.payload.len() <= MAX_REGION_WIRE_BYTES);
             }
             // INV-R while the receiver is at the reference.
             if canvas.applied_update_id() == encoder.reference_update_id() {
-                prop_assert_eq!(canvas.cells(), encoder.reference_pixels());
+                prop_assert_eq!(canvas.cells(), encoder.reference_cells());
             }
         }
     }
@@ -255,8 +255,8 @@ proptest! {
         let planned = encoder.encode(&second_frame).expect("encode");
         if let Some(planned) = planned {
             let encoded = encoder.commit(planned, 2);
-            prop_assert!(encoded.sent_pixels <= 4096 + u64::from(width));
-            prop_assert_eq!(encoded.sent_pixels + encoded.backlog_pixels, encoded.changed_pixels);
+            prop_assert!(encoded.sent_cells <= 4096 + u64::from(width));
+            prop_assert_eq!(encoded.sent_cells + encoded.backlog_cells, encoded.changed_cells);
             let parts = UpdateSplitter::new().part(encoded.clone()).expect("parts");
             for part in &parts {
                 prop_assert_eq!(validate_part(part), Ok(()));
@@ -269,11 +269,11 @@ proptest! {
             let Some(planned) = planned else { break };
             let encoded = encoder.commit(planned, id);
             canvas.apply(&encoded).expect("applies");
-            if encoded.backlog_pixels == 0 {
+            if encoded.backlog_cells == 0 {
                 break;
             }
         }
-        prop_assert_eq!(canvas.cells(), encoder.reference_pixels());
+        prop_assert_eq!(canvas.cells(), encoder.reference_cells());
     }
 }
 
@@ -404,7 +404,7 @@ fn inv_r_holds_through_a_lossy_transport() {
         if canvas.applied_update_id() == encoder.reference_update_id() {
             assert_eq!(
                 canvas.cells(),
-                encoder.reference_pixels(),
+                encoder.reference_cells(),
                 "step {step}: the canvas must equal the sender's reference"
             );
             if losses > 0 {
@@ -430,7 +430,7 @@ fn inv_r_holds_through_a_lossy_transport() {
         "every loss must heal within four frames: {heals:?}"
     );
     assert!(
-        canvas.cells() == encoder.reference_pixels()
+        canvas.cells() == encoder.reference_cells()
             || canvas.applied_update_id() < encoder.reference_update_id(),
         "the final state must be either in sync or a reported loss"
     );
@@ -467,9 +467,9 @@ fn deliver(
                     height: assembled.height,
                     codec: tessellio_core::Codec::Tessellio,
                     regions: assembled.regions,
-                    changed_pixels: 0,
-                    sent_pixels: 0,
-                    backlog_pixels: 0,
+                    changed_cells: 0,
+                    sent_cells: 0,
+                    backlog_cells: 0,
                     reset_reasons: Default::default(),
                 };
                 match canvas.apply(&frame) {
@@ -599,9 +599,9 @@ fn the_reference_accessor_reports_geometry() {
         ..CodecConfig::default()
     });
     assert_eq!(encoder.reference_geometry(), None);
-    assert!(encoder.reference_pixels().is_empty());
+    assert!(encoder.reference_cells().is_empty());
     let frame = plain(32, 16, [1, 2, 3, 255]);
     let _ = encode_frame(&mut encoder, &frame, 1);
     assert_eq!(encoder.reference_geometry(), Some((32, 16)));
-    assert_eq!(encoder.reference_pixels().len(), 32 * 16);
+    assert_eq!(encoder.reference_cells().len(), 32 * 16);
 }

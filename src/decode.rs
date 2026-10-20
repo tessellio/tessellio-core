@@ -439,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_literal_run_decodes_to_the_documented_pixels() {
+    fn v2_literal_run_decodes_to_the_documented_cells() {
         // §9.1 V2 op stream: ROW 0; SPAN x=0 len=4; 0xF800 0x07E0 0x001F 0xFFFF; END.
         let ops = vec![
             0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x04, 0x00, 0x00, 0xf8, 0xe0, 0x07, 0x1f, 0x00,
@@ -461,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn v3_full_coverage_fills_decode_to_the_documented_pixels() {
+    fn v3_full_coverage_fills_decode_to_the_documented_cells() {
         // §9.1 V3 op stream: three rows, each ROW + FILL of the full width.
         let mut ops = Vec::new();
         emit_row(&mut ops, 0);
