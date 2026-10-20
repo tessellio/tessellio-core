@@ -75,17 +75,17 @@ status is a contract too: `0` succeeded, `1` the check failed, `2` the usage
 was wrong, `3` the input could not be read.
 
 ```console
-$ tessellio-core bench --iterations 3
-the codec's measured performance (3 iteration(s) per scenario)
+$ tessellio-core bench --iterations 5
+the codec's measured performance (5 iteration(s) per scenario, optimized build)
 
-scenario           bytes   byte budget  median ms  p95 ms   ratio  ratio budget  verdict
-pointer_1px        92      128          15.802     16.132   0.21   3.0           within
+scenario           bytes   byte budget  median ms  p95 ms  ratio  ms budget  verdict
+pointer_1px        92      128          0.788      0.919   0.55   40         within
 …
 9 of 9 scenario(s) inside their budgets
 ```
 
 The bench holds the codec to the reference implementation's measured byte
-bounds and to a machine-independent encode-time ratio, so it is a gate: a
+bounds and to the specification's measured encode costs, so it is a gate: a
 scenario that leaves its budget makes the command exit with the status `1`.
 
 Build it with `cargo build --release`; the binary is

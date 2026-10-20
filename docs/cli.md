@@ -184,6 +184,7 @@ was applied to; it is `null` when the update carried no surface.
 ```json
 {
   "command": "bench",
+  "profile": "optimized",
   "iterations": 5,
   "scenarios": [
     {
@@ -191,11 +192,11 @@ was applied to; it is `null` when the update carried no surface.
       "summary": "a one-cell pointer move over an office scene",
       "bytes": 92,
       "byte_budget": 128,
-      "encode_ms_median": 1.9,
-      "encode_ms_p95": 2.1,
-      "baseline_ms_median": 8.4,
-      "encode_over_baseline": 0.23,
-      "encode_over_baseline_budget": 3.0,
+      "encode_ms_median": 0.79,
+      "encode_ms_p95": 0.92,
+      "baseline_ms_median": 1.43,
+      "encode_over_baseline": 0.55,
+      "encode_ms_budget": 40.0,
       "regions": 1,
       "parts": 1,
       "within_budget": true
@@ -204,6 +205,9 @@ was applied to; it is `null` when the update carried no surface.
   "summary": { "total": 9, "failed": 0 }
 }
 ```
+
+`profile` is `optimized` or `unoptimized`: the tool knows which build it
+is, and the time budget it holds itself to is the one for that profile.
 
 ### `limits`
 
@@ -241,11 +245,19 @@ The bench holds the codec to two budgets, and both are in
 * the **byte** budget is the reference implementation's measured bound for
   that scenario — 92 bytes for a one-cell pointer move, 2 466 for a 600×40
   retyped block, 82 799 for a 1080p self-contained update, and so on. The
-  bench reproduces those measurements exactly, on the crate's own scenes;
-* the **time** budget is the encode's cost over the capture interface's own
-  conversion of the same frame, measured in the same run. The ratio is what
-  makes the budget machine-independent: a slower machine does not fail the
-  gate and a slower codec does.
+  bench reproduces those measurements exactly, on the crate's own scenes, and
+  the budget is machine-independent;
+* the **time** budget is the specification's measured cost of an encode —
+  ≈ 4 ms for a chained update and 7.53 ms for a 1080p self-contained one —
+  with an order of magnitude of slack, so a shared machine does not fail the
+  gate and a regression of an order of magnitude does. The budget is stated
+  for an optimized build; an unoptimized build is an order of magnitude
+  slower, and the tool knows which one it is.
+
+The bench also prints the encode's cost over the capture interface's own
+conversion of the same frame (`encode_over_baseline`), measured in the same
+run: the conversion is the same work on every machine, so the ratio says how
+much the codec costs on top of what the capture already paid.
 
 A scenario that leaves its budget makes the command exit with the status
 `1`, so `tessellio-core bench` is a gate.

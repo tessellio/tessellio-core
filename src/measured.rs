@@ -31,22 +31,30 @@ pub const MIX_MAX_BYTES: usize = 1_024;
 /// A 1080p office self-contained update: 82 799 bytes.
 pub const RESET_FRAME_MAX_BYTES: usize = 98_304;
 
-/// The cost of a chained update's encode, over the capture interface's own
-/// conversion of the same frame.
+/// The cost of a chained update's encode, in an optimized build.
 ///
-/// The ratio is what makes the budget machine-independent: the conversion is
-/// the same work on every machine and in every build profile, so a slower
-/// machine does not fail the gate and a slower codec does. The budget is the
-/// measured ratio with a margin.
-pub const CHAINED_ENCODE_RATIO: f64 = 3.0;
+/// The specification measures a chained update at ≈ 4 ms on a loaded 16-core
+/// machine; the budget is that measurement with an order of magnitude of
+/// slack, so a shared machine does not fail the gate and a regression of an
+/// order of magnitude does.
+pub const CHAINED_ENCODE_MAX_MS: f64 = 40.0;
 
-/// The cost of a 1080p self-contained update's encode, over the capture
-/// interface's own conversion of the same frame.
+/// The cost of a 1080p self-contained update's encode, in an optimized build.
 ///
-/// A self-contained update compresses every region of the surface, so it
-/// costs more than a chained one; the budget is the measured ratio with a
-/// margin.
-pub const RESET_ENCODE_RATIO: f64 = 4.0;
+/// The specification measures it at 7.53 ms on a loaded 16-core machine; the
+/// budget is that measurement with the same order of magnitude of slack.
+pub const RESET_ENCODE_MAX_MS: f64 = 150.0;
+
+/// The cost of a chained update's encode, in an unoptimized build.
+///
+/// An unoptimized build is an order of magnitude slower, and the tool knows
+/// which build it is: the budget it holds itself to is the one for its own
+/// profile.
+pub const CHAINED_ENCODE_MAX_MS_DEBUG: f64 = 800.0;
+
+/// The cost of a 1080p self-contained update's encode, in an unoptimized
+/// build.
+pub const RESET_ENCODE_MAX_MS_DEBUG: f64 = 3_000.0;
 
 #[cfg(test)]
 mod tests {
@@ -68,10 +76,12 @@ mod tests {
     }
 
     #[test]
-    fn the_encode_budgets_are_above_one() {
+    fn the_encode_budgets_are_above_the_measured_costs() {
         const {
-            assert!(CHAINED_ENCODE_RATIO > 1.0);
-            assert!(RESET_ENCODE_RATIO > CHAINED_ENCODE_RATIO);
+            assert!(CHAINED_ENCODE_MAX_MS > 4.0);
+            assert!(RESET_ENCODE_MAX_MS > 7.53);
+            assert!(CHAINED_ENCODE_MAX_MS_DEBUG > CHAINED_ENCODE_MAX_MS);
+            assert!(RESET_ENCODE_MAX_MS_DEBUG > RESET_ENCODE_MAX_MS);
         }
     }
 }

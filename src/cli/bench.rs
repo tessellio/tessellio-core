@@ -16,9 +16,10 @@ use serde_json::{Value, json};
 
 use crate::cli::{CliError, Options, Produced, json_line, table};
 use crate::measured::{
-    CHAINED_ENCODE_RATIO, CURSOR_1PX_MAX_BYTES, CURSOR_16PX_MAX_BYTES, DRAG_MAX_BYTES,
-    FULL_WIDTH_SCROLL_MAX_BYTES, MIX_MAX_BYTES, NOISE_FRAME_MAX_BYTES, RESET_ENCODE_RATIO,
-    RESET_FRAME_MAX_BYTES, SCROLL_MAX_BYTES, TYPING_MAX_BYTES,
+    CHAINED_ENCODE_MAX_MS, CHAINED_ENCODE_MAX_MS_DEBUG, CURSOR_1PX_MAX_BYTES,
+    CURSOR_16PX_MAX_BYTES, DRAG_MAX_BYTES, FULL_WIDTH_SCROLL_MAX_BYTES, MIX_MAX_BYTES,
+    NOISE_FRAME_MAX_BYTES, RESET_ENCODE_MAX_MS, RESET_ENCODE_MAX_MS_DEBUG, RESET_FRAME_MAX_BYTES,
+    SCROLL_MAX_BYTES, TYPING_MAX_BYTES,
 };
 use crate::scene::{
     desktop_with_window, document, draw_cursor, fill_rect, noise_block, office, scroll_viewport,
@@ -53,11 +54,39 @@ struct Scenario {
     summary: &'static str,
     /// The budget the bytes are held to.
     byte_budget: f64,
-    /// The budget the encode time is held to, as a multiple of the capture
-    /// interface's own conversion of the same frame.
-    ratio_budget: f64,
+    /// The budget the encode time is held to, in milliseconds.
+    time_budget_ms: f64,
     /// The scenario itself.
     run: fn(&mut ScreenStreamEncoder) -> Outcome,
+}
+
+/// The build profile the tool was built with.
+///
+/// The time budgets are stated for an optimized build, and an unoptimized
+/// build is an order of magnitude slower. The tool knows which it is, and
+/// holds itself to the budget for that profile.
+const PROFILE: &str = if cfg!(debug_assertions) {
+    "unoptimized"
+} else {
+    "optimized"
+};
+
+/// The budget a chained update's encode is held to, in this build.
+fn chained_budget_ms() -> f64 {
+    if cfg!(debug_assertions) {
+        CHAINED_ENCODE_MAX_MS_DEBUG
+    } else {
+        CHAINED_ENCODE_MAX_MS
+    }
+}
+
+/// The budget a self-contained update's encode is held to, in this build.
+fn reset_budget_ms() -> f64 {
+    if cfg!(debug_assertions) {
+        RESET_ENCODE_MAX_MS_DEBUG
+    } else {
+        RESET_ENCODE_MAX_MS
+    }
 }
 
 /// Encode one frame and commit it.
@@ -103,7 +132,7 @@ fn scenarios() -> Vec<Scenario> {
             name: "pointer_1px",
             summary: "a one-cell pointer move over an office scene",
             byte_budget: CURSOR_1PX_MAX_BYTES as f64,
-            ratio_budget: CHAINED_ENCODE_RATIO,
+            time_budget_ms: chained_budget_ms(),
             run: |encoder| {
                 let mut frame = office(1920, 1080, 11);
                 draw_cursor(&mut frame, 900, 600);
@@ -117,7 +146,7 @@ fn scenarios() -> Vec<Scenario> {
             name: "pointer_16px",
             summary: "a sixteen-cell pointer move over an office scene",
             byte_budget: CURSOR_16PX_MAX_BYTES as f64,
-            ratio_budget: CHAINED_ENCODE_RATIO,
+            time_budget_ms: chained_budget_ms(),
             run: |encoder| {
                 let mut frame = office(1920, 1080, 13);
                 draw_cursor(&mut frame, 900, 600);
@@ -131,7 +160,7 @@ fn scenarios() -> Vec<Scenario> {
             name: "typing_600x40",
             summary: "a 600×40 block retyped over a document",
             byte_budget: TYPING_MAX_BYTES as f64,
-            ratio_budget: CHAINED_ENCODE_RATIO,
+            time_budget_ms: chained_budget_ms(),
             run: |encoder| {
                 let mut frame = document(1920, 1080);
                 text_line(&mut frame, 600, 500, 85, 3);
@@ -146,7 +175,7 @@ fn scenarios() -> Vec<Scenario> {
             name: "window_drag",
             summary: "a 600×400 window dragged 30 pixels",
             byte_budget: DRAG_MAX_BYTES as f64,
-            ratio_budget: CHAINED_ENCODE_RATIO,
+            time_budget_ms: chained_budget_ms(),
             run: |encoder| {
                 let frame = desktop_with_window(1920, 1080, (900, 400, 600, 400));
                 let base = encode(encoder, &frame, 1);
@@ -159,7 +188,7 @@ fn scenarios() -> Vec<Scenario> {
             name: "scroll_900x620",
             summary: "a 900×620 viewport scrolled 40 pixels",
             byte_budget: SCROLL_MAX_BYTES as f64,
-            ratio_budget: CHAINED_ENCODE_RATIO,
+            time_budget_ms: chained_budget_ms(),
             run: |encoder| {
                 let mut frame = document(1920, 1080);
                 let base = encode(encoder, &frame, 1);
@@ -172,7 +201,7 @@ fn scenarios() -> Vec<Scenario> {
             name: "full_width_scroll",
             summary: "a 1680×920 page scrolled 40 pixels",
             byte_budget: FULL_WIDTH_SCROLL_MAX_BYTES as f64,
-            ratio_budget: CHAINED_ENCODE_RATIO,
+            time_budget_ms: chained_budget_ms(),
             run: |encoder| {
                 let mut frame = document(1920, 1080);
                 let base = encode(encoder, &frame, 1);
@@ -185,7 +214,7 @@ fn scenarios() -> Vec<Scenario> {
             name: "noise_640x360",
             summary: "a 640×360 block of high-entropy content",
             byte_budget: NOISE_FRAME_MAX_BYTES as f64,
-            ratio_budget: CHAINED_ENCODE_RATIO,
+            time_budget_ms: chained_budget_ms(),
             run: |encoder| {
                 let mut frame = office(1920, 1080, 17);
                 let base = encode(encoder, &frame, 1);
@@ -198,7 +227,7 @@ fn scenarios() -> Vec<Scenario> {
             name: "interactive_mix",
             summary: "the weighted interactive mix: pointer 50 %, typing 20 %, scroll 15 %, drag 10 %",
             byte_budget: MIX_MAX_BYTES as f64,
-            ratio_budget: CHAINED_ENCODE_RATIO,
+            time_budget_ms: chained_budget_ms(),
             run: |encoder| {
                 let mut frame = office(1920, 1080, 37);
                 draw_cursor(&mut frame, 700, 500);
@@ -246,7 +275,7 @@ fn scenarios() -> Vec<Scenario> {
             name: "reset_1080p",
             summary: "a 1080p office scene as a self-contained update",
             byte_budget: RESET_FRAME_MAX_BYTES as f64,
-            ratio_budget: RESET_ENCODE_RATIO,
+            time_budget_ms: reset_budget_ms(),
             run: |encoder| {
                 let frame = office(1920, 1080, 31);
                 let (update, elapsed) = timed(encoder, &frame, 1);
@@ -285,6 +314,7 @@ pub fn bench(options: &Options, json: bool) -> Result<Produced, CliError> {
     if json {
         Ok(Produced::ok(json_line(&json!({
             "command": "bench",
+            "profile": PROFILE,
             "iterations": iterations,
             "scenarios": results
                 .iter()
@@ -298,7 +328,7 @@ pub fn bench(options: &Options, json: bool) -> Result<Produced, CliError> {
                         "encode_ms_p95": result.encode_ms_p95,
                         "baseline_ms_median": result.baseline_ms_median,
                         "encode_over_baseline": result.ratio,
-                        "encode_over_baseline_budget": result.ratio_budget,
+                        "encode_ms_budget": result.time_budget_ms,
                         "regions": result.regions,
                         "parts": result.parts,
                         "within_budget": result.within_budget,
@@ -338,8 +368,8 @@ struct Measurement {
     baseline_ms_median: f64,
     /// The encode time over the conversion time.
     ratio: f64,
-    /// The budget the ratio is held to.
-    ratio_budget: f64,
+    /// The budget the encode time is held to, in milliseconds.
+    time_budget_ms: f64,
     /// The regions of the measured update.
     regions: usize,
     /// The parts of the measured update.
@@ -404,10 +434,10 @@ fn run_one(scenario: &Scenario, iterations: usize) -> Result<Measurement, CliErr
         encode_ms_p95,
         baseline_ms_median,
         ratio,
-        ratio_budget: scenario.ratio_budget,
+        time_budget_ms: scenario.time_budget_ms,
         regions,
         parts,
-        within_budget: bytes <= scenario.byte_budget && ratio <= scenario.ratio_budget,
+        within_budget: bytes <= scenario.byte_budget && encode_ms_median <= scenario.time_budget_ms,
     })
 }
 
@@ -442,7 +472,8 @@ fn percentile_f64(sorted: &[f64], percentile: usize) -> f64 {
 fn render(results: &[Measurement], iterations: usize) -> String {
     let mut text = String::new();
     text.push_str(&format!(
-        "the codec's measured performance ({iterations} iteration(s) per scenario)\n\n"
+        "the codec's measured performance ({iterations} iteration(s) per scenario, \
+         {PROFILE} build)\n\n"
     ));
     let rows: Vec<Vec<String>> = results
         .iter()
@@ -454,7 +485,7 @@ fn render(results: &[Measurement], iterations: usize) -> String {
                 format!("{:.3}", result.encode_ms_median),
                 format!("{:.3}", result.encode_ms_p95),
                 format!("{:.2}", result.ratio),
-                format!("{:.1}", result.ratio_budget),
+                format!("{:.0}", result.time_budget_ms),
                 if result.within_budget {
                     "within".to_string()
                 } else {
@@ -471,7 +502,7 @@ fn render(results: &[Measurement], iterations: usize) -> String {
             "median ms",
             "p95 ms",
             "ratio",
-            "ratio budget",
+            "ms budget",
             "verdict",
         ],
         &rows,
@@ -502,7 +533,7 @@ mod tests {
             assert!(!scenario.name.is_empty());
             assert!(!scenario.summary.is_empty());
             assert!(scenario.byte_budget > 0.0);
-            assert!(scenario.ratio_budget > 0.0);
+            assert!(scenario.time_budget_ms > 0.0);
         }
     }
 

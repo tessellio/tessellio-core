@@ -153,6 +153,7 @@ fn the_json_shape_is_stable() {
     let document = json_of(&benched);
     assert_eq!(document["command"], "bench");
     assert_eq!(document["iterations"], 1);
+    assert!(document["profile"].is_string());
     for scenario in document["scenarios"].as_array().expect("scenarios") {
         assert!(scenario["name"].is_string());
         assert!(scenario["bytes"].is_number());
@@ -161,7 +162,7 @@ fn the_json_shape_is_stable() {
         assert!(scenario["encode_ms_p95"].is_number());
         assert!(scenario["baseline_ms_median"].is_number());
         assert!(scenario["encode_over_baseline"].is_number());
-        assert!(scenario["encode_over_baseline_budget"].is_number());
+        assert!(scenario["encode_ms_budget"].is_number());
         assert_eq!(scenario["within_budget"], true, "{scenario}");
     }
     assert_eq!(document["summary"]["failed"], 0);
