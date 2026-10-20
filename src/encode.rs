@@ -987,7 +987,14 @@ impl ScreenStreamEncoder {
             });
             self.region_ops = ops;
         }
-        record_phase(self.telemetry(), EncodePhase::Pack, pack_started.elapsed());
+        // The packing phase is the work of building the op streams; the
+        // compression that follows inside the same loop is its own phase, so
+        // it is taken out of the packing time.
+        record_phase(
+            self.telemetry(),
+            EncodePhase::Pack,
+            pack_started.elapsed().saturating_sub(compress_time),
+        );
         record_phase(self.telemetry(), EncodePhase::Compress, compress_time);
 
         if selfcheck_failed {
