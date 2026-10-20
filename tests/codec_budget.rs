@@ -28,75 +28,19 @@ mod common;
 use std::time::Instant;
 
 use common::*;
-use tessellio_core::CapturedFrame;
 use tessellio_core::{
     CodecConfig, DELTA_REFRESH_CELLS, DELTA_REFRESH_MIN_CELLS, MAX_PART_WIRE_BYTES,
     MAX_PARTS_PER_UPDATE, MAX_REGION_WIRE_BYTES, MAX_REGIONS_PER_PART, MAX_REGIONS_PER_UPDATE,
     MAX_UPDATE_WIRE_BYTES, ScreenStreamEncoder, UpdateKind,
 };
 
-/// A 1 px pointer move: 92 bytes across, 73 down. The budget is the measured
-/// value plus a margin.
-const CURSOR_1PX_MAX_BYTES: usize = 128;
-/// A 16 px pointer move with a 14×22 pointer: 115 bytes across, 117 down. The
-/// budget is the measured value plus a margin.
-const CURSOR_16PX_MAX_BYTES: usize = 160;
-/// A 600×40 block retyped: 2 466 bytes. The budget is the measured value plus
-/// a margin.
-const TYPING_MAX_BYTES: usize = 3_072;
-/// A 600×400 window dragged 30 px: 1 633 bytes. The budget is the measured
-/// value plus a margin.
-const DRAG_MAX_BYTES: usize = 2_048;
-/// A 900×620 viewport scrolled 40 px: 4 624 bytes. The budget is the measured
-/// value plus a margin.
-const SCROLL_MAX_BYTES: usize = 5_120;
-/// A 1680×920 page scrolled 40 px: 16 380 bytes, and it stays a chained
-/// update. The budget is the measured value plus a margin.
-const FULL_WIDTH_SCROLL_MAX_BYTES: usize = 20_480;
-/// A 640×360 block of high-entropy content: 259 918 bytes in the update that
-/// carries it. The budget is the measured value plus a margin.
-const NOISE_FRAME_MAX_BYTES: usize = 266_240;
-/// The weighted interactive mix (pointer 50 %, typing 20 %, scroll 15 %, drag
-/// 10 %): 777 bytes per update. The budget is the measured value plus a margin.
-const MIX_MAX_BYTES: usize = 1_024;
-/// A 1080p office self-contained update: 82 799 bytes. The budget is the
-/// measured value plus a margin.
-const RESET_FRAME_MAX_BYTES: usize = 98_304;
-
-/// Scroll a viewport up by `shift` rows on a periodic document: everything but
-/// the freshly exposed strip is unchanged, and the strip carries new content.
-fn scroll_viewport(
-    frame: &mut CapturedFrame,
-    x: u32,
-    y: u32,
-    w: u32,
-    h: u32,
-    shift: u32,
-    strip_variant: u32,
-) {
-    let source = frame.clone();
-    for row in 0..h.saturating_sub(shift) {
-        for column in 0..w {
-            let from = (((y + row + shift) * source.width) + x + column) as usize * 4;
-            let to = (((y + row) * source.width) + x + column) as usize * 4;
-            let cell = [
-                source.rgba[from],
-                source.rgba[from + 1],
-                source.rgba[from + 2],
-                source.rgba[from + 3],
-            ];
-            frame.rgba[to..to + 4].copy_from_slice(&cell);
-        }
-    }
-    // The exposed strip: a freshly scrolled-in line, painted on the document
-    // background so only the strip's content differs from before.
-    fill_rect(frame, x, y + h - shift, w, shift, [248, 248, 250, 255]);
-    let mut line_y = y + h - shift + 6.min(shift);
-    while line_y + 12 < y + h {
-        text_line(frame, x, line_y, (w / 7).min(260), strip_variant);
-        line_y += 20;
-    }
-}
+// The budgets are the reference implementation's measured bounds; they live in
+// the crate so the command-line tool holds the codec to the same numbers.
+use tessellio_core::measured::{
+    CURSOR_1PX_MAX_BYTES, CURSOR_16PX_MAX_BYTES, DRAG_MAX_BYTES, FULL_WIDTH_SCROLL_MAX_BYTES,
+    MIX_MAX_BYTES, NOISE_FRAME_MAX_BYTES, RESET_FRAME_MAX_BYTES, SCROLL_MAX_BYTES,
+    TYPING_MAX_BYTES,
+};
 
 /// Print a measurement line (visible with `--nocapture`).
 fn measure(scenario: &str, frame: &tessellio_core::EncodedUpdate, extra: &str) {
