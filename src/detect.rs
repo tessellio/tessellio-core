@@ -112,17 +112,11 @@ impl ChangeMap {
         current: &Surface,
         reference: Option<&'a Surface>,
     ) -> Option<&'a Surface> {
-        self.tiles_x = current.width().div_ceil(TILE);
-        self.tiles_y = current.height().div_ceil(TILE);
-        let tile_count = (self.tiles_x * self.tiles_y) as usize;
-        self.bits.clear();
-        self.bits.resize(tile_count.div_ceil(64), 0);
-        self.dirty_tiles = 0;
-        self.upper_bound_cells = 0;
+        self.prepare_grid(current.width(), current.height());
         let reference =
             reference.filter(|buffer| buffer.matches(current.width(), current.height()));
         let Some(reference) = reference else {
-            for index in 0..tile_count {
+            for index in 0..(self.tiles_x * self.tiles_y) as usize {
                 self.bits[index / 64] |= 1 << (index % 64);
                 self.dirty_tiles += 1;
             }
@@ -130,6 +124,38 @@ impl ChangeMap {
             return None;
         };
         Some(reference)
+    }
+
+    /// Prepare the map for a grid of `width`×`height` cells.
+    ///
+    /// Every tile starts clean and the counters start at zero: a map that has
+    /// not compared anything yet holds no change. The caller compares the rows
+    /// itself, which is what lets several workers compare disjoint bands of
+    /// one frame and merge their maps afterwards.
+    pub(crate) fn prepare_grid(&mut self, width: u32, height: u32) {
+        self.tiles_x = width.div_ceil(TILE);
+        self.tiles_y = height.div_ceil(TILE);
+        let tile_count = (self.tiles_x * self.tiles_y) as usize;
+        self.bits.clear();
+        self.bits.resize(tile_count.div_ceil(64), 0);
+        self.dirty_tiles = 0;
+        self.upper_bound_cells = 0;
+    }
+
+    /// Merge another map's dirty tiles into this one.
+    ///
+    /// The two maps must describe the same tile grid and cover disjoint tiles:
+    /// the counters add and the tile bits combine. Two maps that cover the
+    /// same tile would count it twice, which is why the merge is the
+    /// counterpart of comparing disjoint bands of rows.
+    pub(crate) fn merge_from(&mut self, other: &ChangeMap) {
+        debug_assert_eq!(self.tiles_x, other.tiles_x);
+        debug_assert_eq!(self.tiles_y, other.tiles_y);
+        for (index, word) in other.bits.iter().enumerate() {
+            self.bits[index] |= *word;
+        }
+        self.dirty_tiles += other.dirty_tiles;
+        self.upper_bound_cells += other.upper_bound_cells;
     }
 
     /// Compare one freshly converted row against `reference` and mark the tiles

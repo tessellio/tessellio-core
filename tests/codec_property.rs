@@ -605,3 +605,63 @@ fn the_reference_accessor_reports_geometry() {
     assert_eq!(encoder.reference_geometry(), Some((32, 16)));
     assert_eq!(encoder.reference_cells().len(), 32 * 16);
 }
+
+/// A wide frame is compared across the worker pool, and the bytes it ships
+/// are the bytes the sequential comparison ships.
+#[test]
+fn the_parallel_comparison_ships_the_same_bytes() {
+    let mut frame = office(1920, 1080, 41);
+    let mut sequential = ScreenStreamEncoder::new(CodecConfig {
+        encoder_threads: 1,
+        idle_update_interval: std::time::Duration::ZERO,
+        ..CodecConfig::default()
+    });
+    let mut parallel = ScreenStreamEncoder::new(CodecConfig {
+        encoder_threads: 8,
+        idle_update_interval: std::time::Duration::ZERO,
+        ..CodecConfig::default()
+    });
+
+    // The self-contained update is the same either way.
+    let base_sequential = encode_frame(&mut sequential, &frame, 1);
+    let base_parallel = encode_frame(&mut parallel, &frame, 1);
+    assert_eq!(base_sequential.regions.len(), base_parallel.regions.len());
+    for (left, right) in base_sequential.regions.iter().zip(&base_parallel.regions) {
+        assert_eq!(left.x, right.x);
+        assert_eq!(left.y, right.y);
+        assert_eq!(left.width, right.width);
+        assert_eq!(left.height, right.height);
+        assert_eq!(left.payload, right.payload);
+    }
+
+    // A change that lands in several tile bands, so the bands are spread over
+    // the workers and every one of them decides a tile.
+    fill_rect(&mut frame, 100, 40, 700, 300, [12, 200, 90, 255]);
+    fill_rect(&mut frame, 1500, 800, 300, 200, [200, 30, 90, 255]);
+    let delta_sequential = encode_frame(&mut sequential, &frame, 2);
+    let delta_parallel = encode_frame(&mut parallel, &frame, 2);
+    assert_eq!(delta_sequential.changed_cells, delta_parallel.changed_cells);
+    assert_eq!(delta_sequential.sent_cells, delta_parallel.sent_cells);
+    assert_eq!(delta_sequential.backlog_cells, delta_parallel.backlog_cells);
+    assert_eq!(delta_sequential.regions.len(), delta_parallel.regions.len());
+    for (left, right) in delta_sequential.regions.iter().zip(&delta_parallel.regions) {
+        assert_eq!(left.x, right.x);
+        assert_eq!(left.y, right.y);
+        assert_eq!(left.width, right.width);
+        assert_eq!(left.height, right.height);
+        assert_eq!(
+            left.payload, right.payload,
+            "the parallel comparison ships the same bytes"
+        );
+    }
+    assert_eq!(
+        delta_sequential.payload_bytes(),
+        delta_parallel.payload_bytes()
+    );
+    // And the two paint the same surface.
+    let mut canvas_sequential = decode_frame(&base_sequential);
+    canvas_sequential.apply(&delta_sequential).expect("apply");
+    let mut canvas_parallel = decode_frame(&base_parallel);
+    canvas_parallel.apply(&delta_parallel).expect("apply");
+    assert_eq!(canvas_sequential.cells(), canvas_parallel.cells());
+}
