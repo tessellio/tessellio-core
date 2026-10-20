@@ -100,12 +100,24 @@ fn encode_wave(
 ) -> Result<Vec<Vec<BandRegion>>, CodecError> {
     if workers <= 1 || bands.len() <= 1 {
         // One deflater for the whole wave: its state is reused across the
-        // bands (and across the recursive splits inside one band).
+        // bands (and across the recursive splits inside one band). The op
+        // stream buffer is reused the same way: a band holds up to a
+        // megabyte of ops, and a fresh buffer per band is a fresh mapping
+        // and a fresh set of page faults per band.
         let mut deflater = Deflater::new(level);
+        let mut ops = Vec::new();
         let mut all = Vec::with_capacity(bands.len());
         for (y, height) in bands {
             let mut regions = Vec::new();
-            encode_band(buffer, *y, *height, level, &mut deflater, &mut regions)?;
+            encode_band(
+                buffer,
+                *y,
+                *height,
+                level,
+                &mut deflater,
+                &mut ops,
+                &mut regions,
+            )?;
             all.push(regions);
         }
         return Ok(all);
@@ -115,12 +127,22 @@ fn encode_wave(
         let mut handles = Vec::new();
         for group in bands.chunks(part) {
             handles.push(scope.spawn(move || {
-                // One deflater per worker, reused across that worker's bands.
+                // One deflater and one op stream buffer per worker, reused
+                // across that worker's bands.
                 let mut deflater = Deflater::new(level);
+                let mut ops = Vec::new();
                 let mut results = Vec::with_capacity(group.len());
                 for (y, height) in group {
                     let mut regions = Vec::new();
-                    encode_band(buffer, *y, *height, level, &mut deflater, &mut regions)?;
+                    encode_band(
+                        buffer,
+                        *y,
+                        *height,
+                        level,
+                        &mut deflater,
+                        &mut ops,
+                        &mut regions,
+                    )?;
                     results.push(regions);
                 }
                 Ok::<_, CodecError>(results)
@@ -138,31 +160,34 @@ fn encode_wave(
 }
 
 /// Encode one band, splitting recursively until it fits both region caps.
+///
+/// `ops` is the caller's op stream buffer: it holds the band's ops when the
+/// band is deflated, and it is empty again when the band is done.
 fn encode_band(
     buffer: &Surface,
     y: u32,
     height: u32,
     level: u8,
     deflater: &mut Deflater,
+    ops: &mut Vec<u8>,
     out: &mut Vec<BandRegion>,
 ) -> Result<(), CodecError> {
     let pack_started = std::time::Instant::now();
-    let mut ops = Vec::new();
-    build_ops(buffer, y, height, &mut ops);
+    build_ops(buffer, y, height, ops);
     let pack_ns = pack_started.elapsed().as_nanos() as u64;
     if ops.len() > BAND_OPS_SPLIT_BYTES && height > 1 {
-        return split_band(buffer, y, height, level, deflater, out);
+        return split_band(buffer, y, height, level, deflater, ops, out);
     }
     let width = buffer.width();
-    validate_region_ops(&ops, width, height, Coverage::Full).map_err(|error| {
+    validate_region_ops(ops, width, height, Coverage::Full).map_err(|error| {
         CodecError::Encode(format!("self-contained band self-check failed: {error:?}"))
     })?;
     let compress_started = std::time::Instant::now();
     let mut payload = Vec::with_capacity(ops.len() / 2 + 64);
-    deflater.deflate_into(&ops, level, &mut payload)?;
+    deflater.deflate_into(ops, level, &mut payload)?;
     let compress_ns = compress_started.elapsed().as_nanos() as u64;
     if payload.len() > MAX_REGION_WIRE_BYTES && height > 1 {
-        return split_band(buffer, y, height, level, deflater, out);
+        return split_band(buffer, y, height, level, deflater, ops, out);
     }
     if payload.len() > MAX_REGION_WIRE_BYTES {
         return Err(CodecError::Budget {
@@ -188,11 +213,12 @@ fn split_band(
     height: u32,
     level: u8,
     deflater: &mut Deflater,
+    ops: &mut Vec<u8>,
     out: &mut Vec<BandRegion>,
 ) -> Result<(), CodecError> {
     let half = height / 2;
-    encode_band(buffer, y, half, level, deflater, out)?;
-    encode_band(buffer, y + half, height - half, level, deflater, out)
+    encode_band(buffer, y, half, level, deflater, ops, out)?;
+    encode_band(buffer, y + half, height - half, level, deflater, ops, out)
 }
 
 /// Build the full-coverage op stream for `height` rows starting at `y`.
@@ -207,7 +233,7 @@ fn build_ops(buffer: &Surface, y: u32, height: u32, out: &mut Vec<u8>) {
 
 /// Worker ceiling: the configured value (0 = auto), the machine's parallelism,
 /// and the documented maximum of eight.
-fn worker_count(configured: usize) -> usize {
+pub(crate) fn worker_count(configured: usize) -> usize {
     let configured = if configured == 0 {
         thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
