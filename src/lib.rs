@@ -48,6 +48,9 @@ pub mod reset;
 pub mod scene;
 pub mod telemetry;
 
+#[cfg(feature = "cli")]
+pub mod cli;
+
 pub use buffer::Surface;
 pub use convert::{cells_to_rgba, composite_pointer_in_place, rgba_to_cells};
 pub use decode::{
