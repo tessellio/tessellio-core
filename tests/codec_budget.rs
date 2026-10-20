@@ -2,7 +2,9 @@
 //!
 //! Every case runs the real encoder and decodes the result with the receiver
 //! oracle, so a case fails if the codec changes either the bytes it ships or the
-//! cells it paints. The budget numbers are the design's §1.5 targets; the
+//! cells it paints. Each byte budget is the value the codec measured plus a
+//! margin: the suite catches a growth in what the codec ships, and stays green
+//! over the few per cent a dependency bump can shift a compressed size by. The
 //! `MEASURE` lines make the measured values visible in the run log.
 
 // The crate's lint table does not apply to an integration test,
@@ -33,24 +35,33 @@ use tessellio_core::{
     MAX_UPDATE_WIRE_BYTES, ScreenStreamEncoder, UpdateKind,
 };
 
-/// §1.5: a 1 px pointer move ships at most 256 bytes (either axis).
-const CURSOR_1PX_MAX_BYTES: usize = 256;
-/// §1.5 (corrected in §5.7): a 16 px pointer move with a 14×22 pointer is 768 B.
-const CURSOR_16PX_MAX_BYTES: usize = 768;
-/// §1.5: typing into a 600×40 block.
-const TYPING_MAX_BYTES: usize = 6_000;
-/// §1.5: dragging a 600×400 window 30 px.
-const DRAG_MAX_BYTES: usize = 8_000;
-/// §1.5: scrolling a 900×620 window 40 px.
-const SCROLL_MAX_BYTES: usize = 12_000;
-/// §1.5: scrolling a 1680×920 page 40 px, which must stay a delta.
-const FULL_WIDTH_SCROLL_MAX_BYTES: usize = 60_000;
-/// §5.6: the restated high-entropy bound, per frame (260 KiB).
+/// A 1 px pointer move: 92 bytes across, 73 down. The budget is the measured
+/// value plus a margin.
+const CURSOR_1PX_MAX_BYTES: usize = 128;
+/// A 16 px pointer move with a 14×22 pointer: 115 bytes across, 117 down. The
+/// budget is the measured value plus a margin.
+const CURSOR_16PX_MAX_BYTES: usize = 160;
+/// A 600×40 block retyped: 2 466 bytes. The budget is the measured value plus
+/// a margin.
+const TYPING_MAX_BYTES: usize = 3_072;
+/// A 600×400 window dragged 30 px: 1 633 bytes. The budget is the measured
+/// value plus a margin.
+const DRAG_MAX_BYTES: usize = 2_048;
+/// A 900×620 viewport scrolled 40 px: 4 624 bytes. The budget is the measured
+/// value plus a margin.
+const SCROLL_MAX_BYTES: usize = 5_120;
+/// A 1680×920 page scrolled 40 px: 16 380 bytes, and it stays a chained
+/// update. The budget is the measured value plus a margin.
+const FULL_WIDTH_SCROLL_MAX_BYTES: usize = 20_480;
+/// A 640×360 block of high-entropy content: 259 918 bytes in the update that
+/// carries it. The budget is the measured value plus a margin.
 const NOISE_FRAME_MAX_BYTES: usize = 266_240;
-/// §1.5: the weighted interactive mix (noise excluded, see the case's note).
-const MIX_MAX_BYTES: usize = 6_928;
-/// §1.5: a 1080p office reset frame, lossless the 16-bit cell format.
-const RESET_FRAME_MAX_BYTES: usize = 1_572_864;
+/// The weighted interactive mix (pointer 50 %, typing 20 %, scroll 15 %, drag
+/// 10 %): 777 bytes per update. The budget is the measured value plus a margin.
+const MIX_MAX_BYTES: usize = 1_024;
+/// A 1080p office self-contained update: 82 799 bytes. The budget is the
+/// measured value plus a margin.
+const RESET_FRAME_MAX_BYTES: usize = 98_304;
 
 /// Scroll a viewport up by `shift` rows on a periodic document: everything but
 /// the freshly exposed strip is unchanged, and the strip carries new content.
@@ -551,13 +562,13 @@ fn reset_frame_fits_the_wire_budget_and_the_part_caps() {
 }
 
 #[test]
-fn the_weighted_interactive_mix_meets_the_target() {
-    // The mix weights of §1.5 (pointer 50 %, typing 20 %, scroll 15 %, drag
-    // 10 %). The high-entropy scene is excluded: its payload is incompressible
-    // information rather than codec overhead (§5.6 restates that budget), and
-    // including it would measure entropy, not the codec. The weights are
-    // therefore renormalized over the four interactive scenarios, which makes
-    // the assertion stricter per unit of interactive traffic.
+fn the_weighted_interactive_mix_stays_within_budget() {
+    // The mix weights are pointer 50 %, typing 20 %, scroll 15 %, drag 10 %.
+    // The high-entropy scene is excluded: its payload is incompressible
+    // information rather than codec overhead, and including it would measure
+    // entropy, not the codec. The weights are therefore renormalized over the
+    // four interactive scenarios, which makes the assertion stricter per unit
+    // of interactive traffic.
     let mut encoder = ScreenStreamEncoder::new(codec_config());
 
     // Cursor: a 1 px move on an office desktop.
