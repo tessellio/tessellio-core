@@ -131,6 +131,9 @@ pub struct EncodedUpdate {
     pub sent_cells: u64,
     /// Cells still differing from the reference after this frame.
     pub backlog_cells: u64,
+    /// Flat cell indices this frame carries (changed cells), for transport
+    /// cell accounting. Derived from `writes`; empty on empty frames.
+    pub changed_cell_indices: Vec<u32>,
     /// Non-empty only on reset frames.
     pub reset_reasons: ResetReasons,
 }
@@ -179,6 +182,7 @@ pub struct PlannedUpdate {
     changed_cells: u64,
     sent_cells: u64,
     backlog_cells: u64,
+    changed_cell_indices: Vec<u32>,
     reset_reasons: ResetReasons,
     update: UpdateTarget,
     width: u32,
@@ -197,6 +201,7 @@ impl std::fmt::Debug for PlannedUpdate {
             .field("changed_cells", &self.changed_cells)
             .field("sent_cells", &self.sent_cells)
             .field("backlog_cells", &self.backlog_cells)
+            .field("changed_cell_indices", &self.changed_cell_indices.len())
             .field("reset_reasons", &self.reset_reasons)
             .finish()
     }
@@ -394,6 +399,7 @@ impl ScreenStreamEncoder {
             changed_cells,
             sent_cells,
             backlog_cells,
+            changed_cell_indices,
             reset_reasons,
             update,
             width,
@@ -463,6 +469,7 @@ impl ScreenStreamEncoder {
             changed_cells,
             sent_cells,
             backlog_cells,
+            changed_cell_indices,
             reset_reasons,
         }
     }
@@ -758,6 +765,13 @@ impl ScreenStreamEncoder {
         self.reset_from_y = (covered_to < height).then_some(covered_to);
         self.last_frame_at = Some(Instant::now());
         let reset_reasons = std::mem::take(&mut self.reset_reasons);
+        // Build cell indices from writes.
+        let mut reset_indices = Vec::with_capacity(sent_cells as usize);
+        for span in &writes {
+            for i in 0..span.len {
+                reset_indices.push(span.offset + i);
+            }
+        }
         Ok(Some(PlannedUpdate {
             update_base: 0,
             regions,
@@ -766,6 +780,7 @@ impl ScreenStreamEncoder {
             changed_cells: sent_cells,
             sent_cells,
             backlog_cells: 0,
+            changed_cell_indices: reset_indices,
             reset_reasons,
             update: if fresh {
                 UpdateTarget::Fresh
@@ -825,6 +840,7 @@ impl ScreenStreamEncoder {
                 changed_cells: 0,
                 sent_cells: 0,
                 backlog_cells: 0,
+                changed_cell_indices: Vec::new(),
                 reset_reasons: ResetReasons::none(),
                 update: match base {
                     DeltaBase::Reference => UpdateTarget::Masked,
@@ -1020,6 +1036,13 @@ impl ScreenStreamEncoder {
         };
         self.last_frame_at = Some(Instant::now());
         let undo = undo_from_spans(base_buffer, &writes)?;
+        // Build cell indices from writes.
+        let mut delta_indices = Vec::with_capacity(differing_sent as usize);
+        for span in &writes {
+            for i in 0..span.len {
+                delta_indices.push(span.offset + i);
+            }
+        }
         Ok(Some(PlannedUpdate {
             update_base,
             regions,
@@ -1028,6 +1051,7 @@ impl ScreenStreamEncoder {
             changed_cells,
             sent_cells: differing_sent,
             backlog_cells,
+            changed_cell_indices: delta_indices,
             reset_reasons: ResetReasons::none(),
             update: match base {
                 DeltaBase::Reference => UpdateTarget::Masked,
