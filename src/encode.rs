@@ -86,6 +86,12 @@ impl CodecConfig {
         self
     }
 
+    pub fn with_refresh_cells(mut self, v: u32) -> Self { self.refresh_cells = v; self }
+    pub fn with_delta_deflate_level(mut self, v: u8) -> Self { self.delta_deflate_level = v; self }
+    pub fn with_reset_deflate_level(mut self, v: u8) -> Self { self.reset_deflate_level = v; self }
+    pub fn with_encoder_threads(mut self, v: usize) -> Self { self.encoder_threads = v; self }
+    pub fn with_idle_update_interval(mut self, v: Duration) -> Self { self.idle_update_interval = v; self }
+
     /// Read the codec knobs from the environment.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
         let defaults = Self::default();
