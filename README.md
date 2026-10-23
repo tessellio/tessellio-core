@@ -121,6 +121,12 @@ let encoder = ScreenStreamEncoder::with_telemetry(config, telemetry);
 A library does not decide where its measurements go: the application embedding
 it does.
 
+## Builders
+
+`CodecConfig` carries `with_*` builder methods for ergonomic construction:
+`with_refresh_cells`, `with_delta_deflate_level`, `with_reset_deflate_level`,
+`with_encoder_threads`, `with_idle_update_interval`.
+
 ## Verifying it
 
 ```sh
