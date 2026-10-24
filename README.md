@@ -133,6 +133,13 @@ See `examples/` directory. Run with `cargo run --example <name>`:
 basic, decode, telemetry, parts, scene, convert, detect, ops, format,
 reference, frame, reset, error.
 
+## Examples
+
+See `examples/` directory (22 examples). Run with `cargo run --example <name>`:
+basic, decode, telemetry, parts, scene, convert, detect, ops, format,
+reference, frame, reset, error, full, bench, pointer, scroll, fill, text,
+noise, lcg, cursor_at, scroll_viewport, composite_pointer.
+
 ## Verifying it
 
 ```sh
