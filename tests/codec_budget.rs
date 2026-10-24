@@ -448,6 +448,7 @@ fn static_frame_costs_nothing_and_stays_inside_its_cpu_ratio() {
     );
 }
 
+#[cfg(feature = "parallel")]
 #[test]
 fn reset_frame_fits_the_wire_budget_and_the_part_caps() {
     let mut encoder = ScreenStreamEncoder::new(codec_config());

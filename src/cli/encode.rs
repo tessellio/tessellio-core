@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use crate::cli::wire::{Envelope, encode_envelope, sha256_hex};
 use crate::cli::{CliError, Options, Produced, hex, json_line, table};
 use crate::format::Region;
+#[cfg(feature = "scenes")]
 use crate::scene::{draw_cursor, office};
 use crate::telemetry::{CodecEvent, EncodePhase, SharedTelemetry, Telemetry};
 use crate::{CapturedFrame, CodecConfig, EncodedUpdate, ScreenStreamEncoder, UpdateSplitter};
@@ -75,7 +76,9 @@ pub fn encode(options: &Options, json: bool) -> Result<Produced, CliError> {
         encoder.commit(base, update_id);
         let mut moved = frame.clone();
         let (x, y) = (frame.width() as i32 / 2, frame.height() as i32 / 2);
+        #[cfg(feature = "scenes")]
         draw_cursor(&mut moved, x, y);
+        #[cfg(feature = "scenes")]
         draw_cursor(&mut moved, x + 1, y);
         let planned = plan(&mut encoder, &moved)?;
         encoder.commit(planned, update_id + 1)
@@ -174,20 +177,29 @@ fn read_surface(options: &Options) -> Result<CapturedFrame, CliError> {
         return CapturedFrame::new(width, height, rgba)
             .map_err(|error| CliError::Input(format!("the surface is not valid: {error}")));
     }
-    let scene_name = options.value("scene").unwrap_or("office");
-    if scene_name != "office" {
-        return Err(CliError::Usage(format!(
-            "unknown scene {scene_name:?}; the scene is `office`"
-        )));
+    #[cfg(not(feature = "scenes"))]
+    {
+        let _ = width;
+        let _ = height;
+        return Err(CliError::Usage("scenes feature not enabled".to_string()));
     }
-    let width = width.unwrap_or(640);
-    let height = height.unwrap_or(360);
-    if width == 0 || height == 0 {
-        return Err(CliError::Usage(
-            "the surface's dimensions must not be zero".to_string(),
-        ));
+    #[cfg(feature = "scenes")]
+    {
+        let scene_name = options.value("scene").unwrap_or("office");
+        if scene_name != "office" {
+            return Err(CliError::Usage(format!(
+                "unknown scene {scene_name:?}; the scene is `office`"
+            )));
+        }
+        let width = width.unwrap_or(640);
+        let height = height.unwrap_or(360);
+        if width == 0 || height == 0 {
+            return Err(CliError::Usage(
+                "the surface's dimensions must not be zero".to_string(),
+            ));
+        }
+        Ok(office(width, height, 29))
     }
-    Ok(office(width, height, 29))
 }
 
 /// Read the codec's configuration.

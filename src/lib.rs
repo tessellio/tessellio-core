@@ -49,6 +49,7 @@ pub mod ops;
 pub mod part;
 pub mod reference;
 pub mod reset;
+#[cfg(feature = "scenes")]
 pub mod scene;
 pub mod telemetry;
 
