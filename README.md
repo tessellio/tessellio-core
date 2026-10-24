@@ -127,6 +127,12 @@ it does.
 `with_refresh_cells`, `with_delta_deflate_level`, `with_reset_deflate_level`,
 `with_encoder_threads`, `with_idle_update_interval`.
 
+## Examples
+
+See `examples/` directory. Run with `cargo run --example <name>`:
+basic, decode, telemetry, parts, scene, convert, detect, ops, format,
+reference, frame, reset, error.
+
 ## Verifying it
 
 ```sh
