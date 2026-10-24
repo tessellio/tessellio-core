@@ -1,7 +1,7 @@
 //! Decode example.
 
-use tessellio_core::{CodecConfig, ScreenStreamEncoder, CapturedFrame, SurfaceCanvas};
 use std::time::Instant;
+use tessellio_core::{CapturedFrame, CodecConfig, ScreenStreamEncoder, SurfaceCanvas};
 
 fn main() {
     let mut encoder = ScreenStreamEncoder::new(CodecConfig::default());

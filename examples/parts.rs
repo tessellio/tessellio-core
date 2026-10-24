@@ -8,7 +8,7 @@ fn main() {
     let frame = CapturedFrame::new(320, 180, rgba).unwrap();
     if let Ok(Some(planned)) = encoder.encode(&frame) {
         let update = encoder.commit(planned, 1);
-        let mut splitter = UpdateSplitter::new();
+        let splitter = UpdateSplitter::new();
         match splitter.part(update.clone()) {
             Ok(parts) => println!("parts: {}", parts.len()),
             Err(e) => println!("split err: {:?}", e),

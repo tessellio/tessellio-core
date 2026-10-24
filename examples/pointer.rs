@@ -1,6 +1,6 @@
 //! Pointer example: draw cursor on surface.
 
-use tessellio_core::{CapturedFrame, Surface, scene};
+use tessellio_core::{Surface, scene};
 
 fn main() {
     let mut frame = scene::office(640, 360, 42);

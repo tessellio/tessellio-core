@@ -433,7 +433,7 @@ mod tests {
             changed_cells: 0,
             sent_cells: 0,
             backlog_cells: 0,
-changed_cell_indices: Vec::new(),
+            changed_cell_indices: Vec::new(),
             reset_reasons: Default::default(),
         }
     }

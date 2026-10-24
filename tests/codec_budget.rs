@@ -38,8 +38,7 @@ use tessellio_core::{
 // the crate so the command-line tool holds the codec to the same numbers.
 use tessellio_core::measured::{
     CURSOR_1PX_MAX_BYTES, CURSOR_16PX_MAX_BYTES, DRAG_MAX_BYTES, FULL_WIDTH_SCROLL_MAX_BYTES,
-    MIX_MAX_BYTES, NOISE_FRAME_MAX_BYTES, RESET_FRAME_MAX_BYTES, SCROLL_MAX_BYTES,
-    TYPING_MAX_BYTES,
+    MIX_MAX_BYTES, NOISE_FRAME_MAX_BYTES, SCROLL_MAX_BYTES, TYPING_MAX_BYTES,
 };
 
 /// Print a measurement line (visible with `--nocapture`).

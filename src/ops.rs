@@ -119,6 +119,52 @@ impl Deflater {
 /// Output staging buffer of one deflate pass (see [`Deflater::deflate_into`]).
 const DEFLATE_SCRATCH_BYTES: usize = 16 * 1024;
 
+/// Prefix the level probe compresses (see [`Deflater::deflate_level_for`]).
+///
+/// An op stream whose first pages do not compress at the deep level will not
+/// compress further in either, and one that does compress there is content the
+/// fast level must be checked against — a prefix is enough to tell the two
+/// apart, and the probe costs a fraction of one region's full pass.
+pub const LEVEL_PROBE_BYTES: usize = 16 * 1024;
+
+/// How close the fast level's prefix must stay to the deep level's for the
+/// fast level to be chosen (see [`Deflater::deflate_level_for`]).
+const LEVEL_PROBE_RATIO: f64 = 1.02;
+
+impl Deflater {
+    /// Choose the DEFLATE level for an op stream by measuring its prefix.
+    ///
+    /// High-entropy op streams (camera noise, dithered photo regions) sit at
+    /// the entropy floor: the fast level's output is within a fraction of a
+    /// percent of the deep level's, at a third of the cost. Content with real
+    /// structure (text, flat chrome, gradients) compresses far better at the
+    /// deep level, and the probe says so too. Both prefix passes land in
+    /// `probe_out`, which is scratch the caller reuses across regions.
+    ///
+    /// Streams too small to probe, and a configured level of `0` (stored),
+    /// return the configured level unchanged.
+    pub fn deflate_level_for(
+        &mut self,
+        ops: &[u8],
+        configured: u8,
+        probe_out: &mut Vec<u8>,
+    ) -> Result<u8, CodecError> {
+        if configured <= 1 || ops.len() < LEVEL_PROBE_BYTES * 2 {
+            return Ok(configured);
+        }
+        let prefix = &ops[..LEVEL_PROBE_BYTES];
+        self.deflate_into(prefix, 1, probe_out)?;
+        let fast = probe_out.len();
+        self.deflate_into(prefix, configured, probe_out)?;
+        let deep = probe_out.len();
+        if fast as f64 <= deep as f64 * LEVEL_PROBE_RATIO + 32.0 {
+            Ok(1)
+        } else {
+            Ok(configured)
+        }
+    }
+}
+
 /// Append an `END` op.
 pub fn emit_end(out: &mut Vec<u8>) {
     out.push(OP_END);
@@ -133,14 +179,42 @@ pub fn emit_fill(out: &mut Vec<u8>, x: u32, len: u32, value: u16) {
     out.extend_from_slice(&value.to_le_bytes());
 }
 
+/// SPAN payload staging: cells per chunked conversion round (see
+/// [`emit_span_le`]). A literal-heavy frame writes hundreds of thousands of
+/// cells; staging them one stack buffer at a time turns per-cell `extend`
+/// calls into one per chunk.
+const SPAN_CHUNK_CELLS: usize = 128;
+
 /// Append a `SPAN` op writing `values` at column `x`.
 pub fn emit_span(out: &mut Vec<u8>, x: u32, values: &[u16]) {
     debug_assert!(!values.is_empty(), "SPAN must carry at least one cell");
     out.push(OP_SPAN);
     out.extend_from_slice(&(x as u16).to_le_bytes());
     out.extend_from_slice(&(values.len() as u16).to_le_bytes());
-    for value in values {
-        out.extend_from_slice(&value.to_le_bytes());
+    emit_span_le(out, values);
+}
+
+/// Append `values` as little-endian bytes: the SPAN payload.
+///
+/// The bytes are staged through a stack buffer of [`SPAN_CHUNK_CELLS`] cells so
+/// the output grows one `extend_from_slice` per chunk instead of one per cell,
+/// with identical bytes either way (the wire form is defined, not derived from
+/// how it was written).
+fn emit_span_le(out: &mut Vec<u8>, values: &[u16]) {
+    if values.len() <= 4 {
+        // Short spans (the common delta shape) skip the staging buffer.
+        for value in values {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        return;
+    }
+    let mut chunk = [0_u8; SPAN_CHUNK_CELLS * 2];
+    for cells in values.chunks(SPAN_CHUNK_CELLS) {
+        let bytes = cells.len() * 2;
+        for (slot, value) in chunk[..bytes].chunks_exact_mut(2).zip(cells) {
+            slot.copy_from_slice(&value.to_le_bytes());
+        }
+        out.extend_from_slice(&chunk[..bytes]);
     }
 }
 

@@ -1,6 +1,6 @@
 //! Convert example: RGBA to cells and back.
 
-use tessellio_core::{cells_to_rgba, rgba_to_cells, Surface};
+use tessellio_core::{Surface, cells_to_rgba, rgba_to_cells};
 
 fn main() {
     let width = 320u32;

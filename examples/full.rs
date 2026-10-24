@@ -1,6 +1,8 @@
 //! Full example: encode + decode + verify.
 
-use tessellio_core::{CapturedFrame, CodecConfig, ScreenStreamEncoder, Surface, SurfaceCanvas, rgba_to_cells};
+use tessellio_core::{
+    CapturedFrame, CodecConfig, ScreenStreamEncoder, Surface, SurfaceCanvas, rgba_to_cells,
+};
 
 fn main() {
     let width = 320u32;

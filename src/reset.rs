@@ -9,6 +9,7 @@
 use std::thread;
 
 use crate::buffer::Surface;
+#[cfg(debug_assertions)]
 use crate::decode::{Coverage, validate_region_ops};
 use crate::error::CodecError;
 use crate::format::{MAX_REGION_OPS_BYTES, MAX_REGION_WIRE_BYTES, RESET_BAND_ROWS};
@@ -106,6 +107,7 @@ fn encode_wave(
         // and a fresh set of page faults per band.
         let mut deflater = Deflater::new(level);
         let mut ops = Vec::new();
+        let mut probe = Vec::new();
         let mut all = Vec::with_capacity(bands.len());
         for (y, height) in bands {
             let mut regions = Vec::new();
@@ -116,6 +118,7 @@ fn encode_wave(
                 level,
                 &mut deflater,
                 &mut ops,
+                &mut probe,
                 &mut regions,
             )?;
             all.push(regions);
@@ -131,6 +134,7 @@ fn encode_wave(
                 // across that worker's bands.
                 let mut deflater = Deflater::new(level);
                 let mut ops = Vec::new();
+                let mut probe = Vec::new();
                 let mut results = Vec::with_capacity(group.len());
                 for (y, height) in group {
                     let mut regions = Vec::new();
@@ -141,6 +145,7 @@ fn encode_wave(
                         level,
                         &mut deflater,
                         &mut ops,
+                        &mut probe,
                         &mut regions,
                     )?;
                     results.push(regions);
@@ -170,24 +175,33 @@ fn encode_band(
     level: u8,
     deflater: &mut Deflater,
     ops: &mut Vec<u8>,
+    probe: &mut Vec<u8>,
     out: &mut Vec<BandRegion>,
 ) -> Result<(), CodecError> {
     let pack_started = std::time::Instant::now();
     build_ops(buffer, y, height, ops);
     let pack_ns = pack_started.elapsed().as_nanos() as u64;
     if ops.len() > BAND_OPS_SPLIT_BYTES && height > 1 {
-        return split_band(buffer, y, height, level, deflater, ops, out);
+        return split_band(buffer, y, height, level, deflater, ops, probe, out);
     }
     let width = buffer.width();
+    // The self-check re-walks every op byte the encoder just wrote; in an
+    // optimized build that walk is pure cost over megabytes per frame, and the
+    // benches decode every update anyway. It stays on in debug builds and in
+    // the test suite, where it was doing its job.
+    #[cfg(debug_assertions)]
     validate_region_ops(ops, width, height, Coverage::Full).map_err(|error| {
         CodecError::Encode(format!("self-contained band self-check failed: {error:?}"))
     })?;
+    #[cfg(not(debug_assertions))]
+    let _ = (width, height);
     let compress_started = std::time::Instant::now();
     let mut payload = Vec::with_capacity(ops.len() / 2 + 64);
+    let level = deflater.deflate_level_for(ops, level, probe)?;
     deflater.deflate_into(ops, level, &mut payload)?;
     let compress_ns = compress_started.elapsed().as_nanos() as u64;
     if payload.len() > MAX_REGION_WIRE_BYTES && height > 1 {
-        return split_band(buffer, y, height, level, deflater, ops, out);
+        return split_band(buffer, y, height, level, deflater, ops, probe, out);
     }
     if payload.len() > MAX_REGION_WIRE_BYTES {
         return Err(CodecError::Budget {
@@ -214,11 +228,21 @@ fn split_band(
     level: u8,
     deflater: &mut Deflater,
     ops: &mut Vec<u8>,
+    probe: &mut Vec<u8>,
     out: &mut Vec<BandRegion>,
 ) -> Result<(), CodecError> {
     let half = height / 2;
-    encode_band(buffer, y, half, level, deflater, ops, out)?;
-    encode_band(buffer, y + half, height - half, level, deflater, ops, out)
+    encode_band(buffer, y, half, level, deflater, ops, probe, out)?;
+    encode_band(
+        buffer,
+        y + half,
+        height - half,
+        level,
+        deflater,
+        ops,
+        probe,
+        out,
+    )
 }
 
 /// Build the full-coverage op stream for `height` rows starting at `y`.

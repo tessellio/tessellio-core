@@ -115,7 +115,7 @@ fn assembled_frame(assembled: AssembledUpdate) -> EncodedUpdate {
         changed_cells: 0,
         sent_cells: 0,
         backlog_cells: 0,
-changed_cell_indices: Vec::new(),
+        changed_cell_indices: Vec::new(),
         reset_reasons: Default::default(),
     }
 }
@@ -170,7 +170,7 @@ fn v1_empty_delta_advances_the_canvas_without_painting() {
             changed_cells: 0,
             sent_cells: 0,
             backlog_cells: 0,
-changed_cell_indices: Vec::new(),
+            changed_cell_indices: Vec::new(),
             reset_reasons: Default::default(),
         })
         .expect("the anchor frame applies");
@@ -646,7 +646,7 @@ fn the_canvas_rejects_a_frame_whose_base_it_does_not_hold() {
         changed_cells: 0,
         sent_cells: 0,
         backlog_cells: 0,
-changed_cell_indices: Vec::new(),
+        changed_cell_indices: Vec::new(),
         reset_reasons: Default::default(),
     };
     // Nothing applied yet: a delta with any base is refused.
@@ -671,7 +671,7 @@ fn the_canvas_discards_a_stale_delta_without_a_resync() {
         changed_cells: 0,
         sent_cells: 0,
         backlog_cells: 0,
-changed_cell_indices: Vec::new(),
+        changed_cell_indices: Vec::new(),
         reset_reasons: Default::default(),
     };
     let mut canvas = SurfaceCanvas::new();

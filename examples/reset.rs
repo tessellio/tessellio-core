@@ -1,6 +1,6 @@
 //! Reset example: band-parallel self-contained update.
 
-use tessellio_core::{CodecConfig, CapturedFrame, ScreenStreamEncoder};
+use tessellio_core::{CapturedFrame, CodecConfig, ScreenStreamEncoder};
 
 fn main() {
     let mut encoder = ScreenStreamEncoder::new(CodecConfig::default());
@@ -9,6 +9,10 @@ fn main() {
     encoder.reset(tessellio_core::format::ResetReason::Operator);
     if let Ok(Some(planned)) = encoder.encode(&frame) {
         let update = encoder.commit(planned, 1);
-        println!("reset update: {} bytes, base={}", update.payload_bytes(), update.update_base);
+        println!(
+            "reset update: {} bytes, base={}",
+            update.payload_bytes(),
+            update.update_base
+        );
     }
 }

@@ -237,7 +237,14 @@ pub fn dashboard(width: u32, height: u32, seed: u32) -> CapturedFrame {
         for cx in 0..cols {
             let x = cx * pw;
             let y = cy * ph;
-            fill_rect(&mut frame, x + 2, y + 2, pw - 4, ph - 4, [255, 255, 255, 255]);
+            fill_rect(
+                &mut frame,
+                x + 2,
+                y + 2,
+                pw - 4,
+                ph - 4,
+                [255, 255, 255, 255],
+            );
             // header bar
             fill_rect(&mut frame, x + 2, y + 2, pw - 4, 24, [60, 64, 72, 255]);
             // chart area
@@ -247,7 +254,14 @@ pub fn dashboard(width: u32, height: u32, seed: u32) -> CapturedFrame {
             let chart_h = ph - 48;
             for i in 0..chart_w {
                 let h = (i as u32 * 7 + seed + cx * 13 + cy * 31) % chart_h.max(1);
-                fill_rect(&mut frame, chart_x + i, chart_y + (chart_h - h), 1, h.max(1), [70, 130, 180, 255]);
+                fill_rect(
+                    &mut frame,
+                    chart_x + i,
+                    chart_y + (chart_h - h),
+                    1,
+                    h.max(1),
+                    [70, 130, 180, 255],
+                );
             }
         }
     }

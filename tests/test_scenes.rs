@@ -1,5 +1,4 @@
-use tessellio_core::{scene, CodecConfig, ScreenStreamEncoder};
-use tessellio_core::CapturedFrame;
+use tessellio_core::{CodecConfig, ScreenStreamEncoder, scene};
 
 #[test]
 fn new_scenes_encode() {
@@ -14,7 +13,6 @@ fn new_scenes_encode() {
 
 #[test]
 fn new_scenes_roundtrip() {
-    use tessellio_core::{CapturedFrame, rgba_to_cells, cells_to_rgba};
     let frame = scene::terminal(128, 96, 7);
     let _ = frame;
 }

@@ -279,7 +279,7 @@ fn hand_built_delta_case(
             changed_cells: 0,
             sent_cells: 0,
             backlog_cells: 0,
-changed_cell_indices: Vec::new(),
+            changed_cell_indices: Vec::new(),
             reset_reasons: Default::default(),
         };
         canvas.apply(&frame).expect("hand-built frame applies");
@@ -739,7 +739,7 @@ fn corpus() -> Value {
             changed_cells: 0,
             sent_cells: 0,
             backlog_cells: 0,
-changed_cell_indices: Vec::new(),
+            changed_cell_indices: Vec::new(),
             reset_reasons: Default::default(),
         };
         let mut canvas = SurfaceCanvas::new();

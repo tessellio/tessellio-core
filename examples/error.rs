@@ -1,6 +1,6 @@
 //! Error example: handle codec errors.
 
-use tessellio_core::{CodecConfig, ScreenStreamEncoder, CapturedFrame};
+use tessellio_core::{CapturedFrame, CodecConfig, ScreenStreamEncoder};
 
 fn main() {
     let mut encoder = ScreenStreamEncoder::new(CodecConfig::default());

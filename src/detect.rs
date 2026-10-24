@@ -81,21 +81,27 @@ impl ChangeMap {
                 .flat_map(|ty| {
                     let y0 = ty * TILE;
                     let y1 = (y0 + TILE).min(height);
-                    (0..tiles_x).map(move |tx| {
-                        let x0 = tx * TILE;
-                        let x1 = (x0 + TILE).min(width);
-                        let mut changed = false;
-                        for y in y0..y1 {
-                            let left = &current.row(y)[x0 as usize..x1 as usize];
-                            let right = &reference.row(y)[x0 as usize..x1 as usize];
-                            if left != right {
-                                changed = true;
-                                break;
+                    (0..tiles_x)
+                        .map(move |tx| {
+                            let x0 = tx * TILE;
+                            let x1 = (x0 + TILE).min(width);
+                            let mut changed = false;
+                            for y in y0..y1 {
+                                let left = &current.row(y)[x0 as usize..x1 as usize];
+                                let right = &reference.row(y)[x0 as usize..x1 as usize];
+                                if left != right {
+                                    changed = true;
+                                    break;
+                                }
                             }
-                        }
-                        let cells = if changed { u64::from(x1 - x0) * u64::from(y1 - y0) } else { 0 };
-                        (tx, ty, changed, cells)
-                    }).collect::<Vec<_>>()
+                            let cells = if changed {
+                                u64::from(x1 - x0) * u64::from(y1 - y0)
+                            } else {
+                                0
+                            };
+                            (tx, ty, changed, cells)
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect();
             for (tx, ty, changed, cells) in results {
@@ -109,29 +115,29 @@ impl ChangeMap {
         }
         #[cfg(not(feature = "parallel"))]
         {
-        for ty in 0..self.tiles_y {
-            let y0 = ty * TILE;
-            let y1 = (y0 + TILE).min(current.height());
-            for tx in 0..self.tiles_x {
-                let x0 = tx * TILE;
-                let x1 = (x0 + TILE).min(current.width());
-                let mut changed = false;
-                for y in y0..y1 {
-                    let left = &current.row(y)[x0 as usize..x1 as usize];
-                    let right = &reference.row(y)[x0 as usize..x1 as usize];
-                    if left != right {
-                        changed = true;
-                        break;
+            for ty in 0..self.tiles_y {
+                let y0 = ty * TILE;
+                let y1 = (y0 + TILE).min(current.height());
+                for tx in 0..self.tiles_x {
+                    let x0 = tx * TILE;
+                    let x1 = (x0 + TILE).min(current.width());
+                    let mut changed = false;
+                    for y in y0..y1 {
+                        let left = &current.row(y)[x0 as usize..x1 as usize];
+                        let right = &reference.row(y)[x0 as usize..x1 as usize];
+                        if left != right {
+                            changed = true;
+                            break;
+                        }
+                    }
+                    if changed {
+                        let index = (ty * self.tiles_x + tx) as usize;
+                        self.bits[index / 64] |= 1 << (index % 64);
+                        self.dirty_tiles += 1;
+                        self.upper_bound_cells += u64::from(x1 - x0) * u64::from(y1 - y0);
                     }
                 }
-                if changed {
-                    let index = (ty * self.tiles_x + tx) as usize;
-                    self.bits[index / 64] |= 1 << (index % 64);
-                    self.dirty_tiles += 1;
-                    self.upper_bound_cells += u64::from(x1 - x0) * u64::from(y1 - y0);
-                }
             }
-        }
         }
     }
 

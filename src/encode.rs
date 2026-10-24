@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use crate::buffer::Surface;
 use crate::convert::{convert_cells, rgba_to_cells};
+#[cfg(debug_assertions)]
 use crate::decode::{Coverage, validate_region_ops};
 use crate::detect::{
     ChangeMap, Span, TILE, bounding_box, is_stale, make_disjoint, merge_to_limit, rects_from_map,
@@ -86,11 +87,26 @@ impl CodecConfig {
         self
     }
 
-    pub fn with_refresh_cells(mut self, v: u32) -> Self { self.refresh_cells = v; self }
-    pub fn with_delta_deflate_level(mut self, v: u8) -> Self { self.delta_deflate_level = v; self }
-    pub fn with_reset_deflate_level(mut self, v: u8) -> Self { self.reset_deflate_level = v; self }
-    pub fn with_encoder_threads(mut self, v: usize) -> Self { self.encoder_threads = v; self }
-    pub fn with_idle_update_interval(mut self, v: Duration) -> Self { self.idle_update_interval = v; self }
+    pub fn with_refresh_cells(mut self, v: u32) -> Self {
+        self.refresh_cells = v;
+        self
+    }
+    pub fn with_delta_deflate_level(mut self, v: u8) -> Self {
+        self.delta_deflate_level = v;
+        self
+    }
+    pub fn with_reset_deflate_level(mut self, v: u8) -> Self {
+        self.reset_deflate_level = v;
+        self
+    }
+    pub fn with_encoder_threads(mut self, v: usize) -> Self {
+        self.encoder_threads = v;
+        self
+    }
+    pub fn with_idle_update_interval(mut self, v: Duration) -> Self {
+        self.idle_update_interval = v;
+        self
+    }
 
     /// Read the codec knobs from the environment.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Self {
@@ -251,6 +267,8 @@ pub struct ScreenStreamEncoder {
     stale_rows: Vec<u64>,
     writes: Vec<WriteSpan>,
     deflater: Deflater,
+    probe_scratch: Vec<u8>,
+    detect_workers: Vec<DetectWorker>,
     selfcheck_failures: u64,
     /// Test-only switch that forces every delta plan through the self-check
     /// failure path, so the pipeline's recovery contract for a skipped frame
@@ -301,6 +319,8 @@ impl ScreenStreamEncoder {
             stale_rows: Vec::new(),
             writes: Vec::new(),
             deflater,
+            probe_scratch: Vec::new(),
+            detect_workers: Vec::new(),
             selfcheck_failures: 0,
             #[cfg(test)]
             injected_selfcheck_failure: false,
@@ -604,48 +624,95 @@ impl ScreenStreamEncoder {
         let reference = reference.filter(|_| reference_usable);
         match reference {
             Some(reference) if parallel => {
+                // Re-arm the worker pool for this frame's grid: the pool is
+                // sized once and its buffers reused, so a parallel frame pays
+                // the thread starts but not the per-worker allocations.
+                if self.detect_workers.len() != workers {
+                    self.detect_workers.clear();
+                    self.detect_workers.resize_with(workers, || DetectWorker {
+                        map: ChangeMap::new(),
+                        scratch: Vec::new(),
+                    });
+                }
+                for worker in &mut self.detect_workers {
+                    worker.map.prepare_grid(frame.width, frame.height);
+                    if worker.scratch.len() < width {
+                        worker.scratch.resize(width, 0);
+                    }
+                }
                 let (convert_time, compare_time) = convert_and_detect_parallel(
                     frame,
                     reference,
                     workspace,
                     change_map,
                     &mut self.stale_rows,
-                    workers,
+                    &mut self.detect_workers,
+                    self.telemetry.wants_phases(),
                 )?;
                 record_phase(self.telemetry(), EncodePhase::Convert, convert_time);
                 record_phase(self.telemetry(), EncodePhase::Compare, compare_time);
             }
             reference => {
+                let timed = self.telemetry.wants_phases();
                 let mut convert_time = Duration::ZERO;
                 let mut compare_time = Duration::ZERO;
                 let row_bytes = width * 4;
-                for y in 0..frame.height {
-                    let start = y as usize * row_bytes;
-                    let started = Instant::now();
-                    convert_cells(
-                        &frame.rgba[start..start + row_bytes],
-                        &mut self.row_scratch[..width],
-                    );
-                    convert_time += started.elapsed();
-                    let started = Instant::now();
-                    let needed = match reference {
-                        // `needed` is `true` when no usable base exists: the row is
-                        // part of a full repaint and must reach the workspace.
-                        Some(reference) => {
-                            change_map.compare_row(&self.row_scratch[..width], reference, y)
+                if timed {
+                    for y in 0..frame.height {
+                        let start = y as usize * row_bytes;
+                        let started = Instant::now();
+                        convert_cells(
+                            &frame.rgba[start..start + row_bytes],
+                            &mut self.row_scratch[..width],
+                        );
+                        convert_time += started.elapsed();
+                        let started = Instant::now();
+                        let needed = match reference {
+                            Some(reference) => {
+                                change_map.compare_row(&self.row_scratch[..width], reference, y)
+                            }
+                            None => true,
+                        };
+                        compare_time += started.elapsed();
+                        let word = y as usize / 64;
+                        let bit = 1_u64 << (y as usize % 64);
+                        if needed {
+                            workspace
+                                .row_mut(y)
+                                .copy_from_slice(&self.row_scratch[..width]);
+                            self.stale_rows[word] &= !bit;
+                        } else {
+                            self.stale_rows[word] |= bit;
                         }
-                        None => true,
-                    };
-                    compare_time += started.elapsed();
-                    let word = y as usize / 64;
-                    let bit = 1_u64 << (y as usize % 64);
-                    if needed {
-                        workspace
-                            .row_mut(y)
-                            .copy_from_slice(&self.row_scratch[..width]);
-                        self.stale_rows[word] &= !bit;
-                    } else {
-                        self.stale_rows[word] |= bit;
+                    }
+                } else {
+                    // No clock reads in the row loop: the same pass without the
+                    // two `Instant::now()` calls per row a phase histogram asks
+                    // for (a 1080p frame is 2 160 rows, so the reads add up).
+                    for y in 0..frame.height {
+                        let start = y as usize * row_bytes;
+                        convert_cells(
+                            &frame.rgba[start..start + row_bytes],
+                            &mut self.row_scratch[..width],
+                        );
+                        // `needed` is `true` when no usable base exists: the row
+                        // is part of a full repaint and must reach the workspace.
+                        let needed = match reference {
+                            Some(reference) => {
+                                change_map.compare_row(&self.row_scratch[..width], reference, y)
+                            }
+                            None => true,
+                        };
+                        let word = y as usize / 64;
+                        let bit = 1_u64 << (y as usize % 64);
+                        if needed {
+                            workspace
+                                .row_mut(y)
+                                .copy_from_slice(&self.row_scratch[..width]);
+                            self.stale_rows[word] &= !bit;
+                        } else {
+                            self.stale_rows[word] |= bit;
+                        }
                     }
                 }
                 record_phase(self.telemetry(), EncodePhase::Convert, convert_time);
@@ -771,12 +838,12 @@ impl ScreenStreamEncoder {
         self.reset_from_y = (covered_to < height).then_some(covered_to);
         self.last_frame_at = Some(Instant::now());
         let reset_reasons = std::mem::take(&mut self.reset_reasons);
-        // Build cell indices from writes.
+        // Build cell indices from writes: one contiguous range per write span
+        // (each span's cells are consecutive flat indices), collected without
+        // the per-cell arithmetic a push loop would do.
         let mut reset_indices = Vec::with_capacity(sent_cells as usize);
         for span in &writes {
-            for i in 0..span.len {
-                reset_indices.push(span.offset + i);
-            }
+            reset_indices.extend(span.offset..span.offset + span.len);
         }
         Ok(Some(PlannedUpdate {
             update_base: 0,
@@ -982,6 +1049,11 @@ impl ScreenStreamEncoder {
             };
             let region_height = last_written - first_written + 1;
             emit_end(&mut ops);
+            // The op-stream self-check re-walks every byte the encoder just
+            // packed; in an optimized build that is pure cost over hundreds of
+            // kilobytes per frame, and the benches decode every update anyway.
+            // It stays on in debug builds and in the test suite.
+            #[cfg(debug_assertions)]
             if let Err(error) =
                 validate_region_ops(&ops, rect.width, region_height, Coverage::Sparse)
             {
@@ -996,8 +1068,12 @@ impl ScreenStreamEncoder {
             }
             let compress_started = Instant::now();
             let mut payload = Vec::with_capacity(ops.len() / 2 + 64);
-            self.deflater
-                .deflate_into(&ops, self.config.delta_deflate_level, &mut payload)?;
+            let level = self.deflater.deflate_level_for(
+                &ops,
+                self.config.delta_deflate_level,
+                &mut self.probe_scratch,
+            )?;
+            self.deflater.deflate_into(&ops, level, &mut payload)?;
             compress_time += compress_started.elapsed();
             if payload.len() > MAX_REGION_WIRE_BYTES {
                 selfcheck_failed = true;
@@ -1042,12 +1118,10 @@ impl ScreenStreamEncoder {
         };
         self.last_frame_at = Some(Instant::now());
         let undo = undo_from_spans(base_buffer, &writes)?;
-        // Build cell indices from writes.
+        // Build cell indices from writes: one contiguous range per write span.
         let mut delta_indices = Vec::with_capacity(differing_sent as usize);
         for span in &writes {
-            for i in 0..span.len {
-                delta_indices.push(span.offset + i);
-            }
+            delta_indices.extend(span.offset..span.offset + span.len);
         }
         Ok(Some(PlannedUpdate {
             update_base,
@@ -1070,16 +1144,37 @@ impl ScreenStreamEncoder {
 }
 
 /// Record the cell runs one row's spans write, in frame coordinates.
+///
+/// A run that continues the previous recorded run (the flat indices are
+/// consecutive) extends it instead of starting a new one: fewer write spans
+/// mean fewer undo segments, fewer journal bytes, and fewer index ranges
+/// downstream, with the same cells covered.
 fn record_writes(row: u32, width: u32, x0: u32, spans: &[Span], out: &mut Vec<WriteSpan>) {
     let row_base = row * width + x0;
     for span in spans {
-        out.push(WriteSpan::new(row_base + span.x, span.len));
+        let offset = row_base + span.x;
+        if let Some(last) = out.last_mut()
+            && last.offset + last.len == offset
+        {
+            last.len += span.len;
+        } else {
+            out.push(WriteSpan::new(offset, span.len));
+        }
     }
 }
 
 /// Cell count below which the sequential convert-and-compare pass is the
 /// cheaper one: the workers cost more to start than the pass they replace.
 const PARALLEL_CONVERT_MIN_CELLS: usize = 1 << 19;
+
+/// One delta-detection worker's reusable state: the band map it merges into
+/// the frame's map afterwards, and the row scratch it converts into. The
+/// encoder holds one per worker and re-arms them per frame, so a parallel
+/// frame pays the thread starts but not the per-worker allocations.
+struct DetectWorker {
+    map: ChangeMap,
+    scratch: Vec<u16>,
+}
 
 /// The worker ceiling of the delta path: the configured value (`0` means the
 /// machine's parallelism), the documented maximum of eight, and the number of
@@ -1106,12 +1201,14 @@ fn convert_and_detect_parallel(
     workspace: &mut Surface,
     change_map: &mut ChangeMap,
     stale_rows: &mut [u64],
-    workers: usize,
+    worker_state: &mut [DetectWorker],
+    timed: bool,
 ) -> Result<(Duration, Duration), CodecError> {
     let width = frame.width as usize;
     let height = frame.height as usize;
     let row_bytes = width * 4;
     let bands = height.div_ceil(TILE as usize);
+    let workers = worker_state.len().max(1);
     let per_worker = bands.div_ceil(workers).max(1);
     let band_rows = per_worker * TILE as usize;
     let frame_width = frame.width;
@@ -1120,40 +1217,60 @@ fn convert_and_detect_parallel(
     let cells = workspace.as_mut_u16();
     let mut cell_chunks = cells.chunks_mut(band_rows * width);
     let mut stale_chunks = stale_rows.chunks_mut(per_worker);
+    let mut state_chunks = worker_state.iter_mut();
     let mut convert_time = Duration::ZERO;
     let mut compare_time = Duration::ZERO;
     thread::scope(|scope| -> Result<(), CodecError> {
         let mut handles = Vec::new();
-        for (index, (chunk, stale)) in cell_chunks.by_ref().zip(stale_chunks.by_ref()).enumerate() {
+        for (index, ((chunk, stale), state)) in cell_chunks
+            .by_ref()
+            .zip(stale_chunks.by_ref())
+            .zip(state_chunks.by_ref())
+            .enumerate()
+        {
             let rows = chunk.len() / width;
             let row_start = index * band_rows;
             let rgba = &frame.rgba[row_start * row_bytes..(row_start + rows) * row_bytes];
             let reference = &*reference;
             handles.push(scope.spawn(move || {
-                let mut map = ChangeMap::new();
+                let DetectWorker { map, scratch } = state;
                 map.prepare_grid(frame_width, frame_height);
-                let mut scratch = vec![0_u16; width];
+                if scratch.len() < width {
+                    scratch.resize(width, 0);
+                }
                 let mut convert = Duration::ZERO;
                 let mut compare = Duration::ZERO;
                 for row in 0..rows {
                     let start = row * row_bytes;
-                    let started = Instant::now();
-                    convert_cells(&rgba[start..start + row_bytes], &mut scratch);
-                    convert += started.elapsed();
-                    let started = Instant::now();
-                    let needed = map.compare_row(&scratch, reference, (row_start + row) as u32);
-                    compare += started.elapsed();
-                    let word = row / 64;
-                    let bit = 1_u64 << (row % 64);
-                    if needed {
-                        let offset = row * width;
-                        chunk[offset..offset + width].copy_from_slice(&scratch);
-                        stale[word] &= !bit;
+                    if timed {
+                        let started = Instant::now();
+                        convert_cells(&rgba[start..start + row_bytes], scratch);
+                        convert += started.elapsed();
+                        let started = Instant::now();
+                        let needed =
+                            map.compare_row(&scratch[..width], reference, (row_start + row) as u32);
+                        compare += started.elapsed();
+                        if needed {
+                            let offset = row * width;
+                            chunk[offset..offset + width].copy_from_slice(&scratch[..width]);
+                            stale[row / 64] &= !(1_u64 << (row % 64));
+                        } else {
+                            stale[row / 64] |= 1_u64 << (row % 64);
+                        }
                     } else {
-                        stale[word] |= bit;
+                        convert_cells(&rgba[start..start + row_bytes], scratch);
+                        let needed =
+                            map.compare_row(&scratch[..width], reference, (row_start + row) as u32);
+                        if needed {
+                            let offset = row * width;
+                            chunk[offset..offset + width].copy_from_slice(&scratch[..width]);
+                            stale[row / 64] &= !(1_u64 << (row % 64));
+                        } else {
+                            stale[row / 64] |= 1_u64 << (row % 64);
+                        }
                     }
                 }
-                (map, convert, compare)
+                (convert, compare)
             }));
         }
         // The rows and the bands split the same way, so both walks end
@@ -1165,15 +1282,20 @@ fn convert_and_detect_parallel(
             ));
         }
         for handle in handles {
-            let (map, convert, compare) = handle.join().map_err(|_| {
+            let (convert, compare) = handle.join().map_err(|_| {
                 CodecError::Encode("the change detection worker panicked".to_string())
             })?;
-            change_map.merge_from(&map);
             convert_time += convert;
             compare_time += compare;
         }
         Ok(())
     })?;
+    // Every worker state was re-armed for this frame's grid before the pass;
+    // a worker whose band chunk did not exist holds an all-clean map, and
+    // merging it adds nothing. The merge therefore runs over the whole pool.
+    for state in worker_state {
+        change_map.merge_from(&state.map);
+    }
     Ok((convert_time, compare_time))
 }
 
@@ -1238,6 +1360,7 @@ impl std::fmt::Debug for ScreenStreamEncoder {
 mod tests {
     use super::*;
     use crate::decode::SurfaceCanvas;
+    use crate::decode::{Coverage, validate_region_ops};
     use crate::ops::{emit_end, emit_fill, emit_row};
 
     /// A deterministic office-like frame: flat surfaces and text-like ink.

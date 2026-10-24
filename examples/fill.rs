@@ -1,6 +1,6 @@
 //! Fill example.
 
-use tessellio_core::{CapturedFrame, scene};
+use tessellio_core::scene;
 
 fn main() {
     let mut frame = scene::office(640, 360, 42);

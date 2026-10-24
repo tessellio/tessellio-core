@@ -73,6 +73,17 @@ pub enum CodecEvent {
 pub trait Telemetry: Send + Sync {
     /// One measurement.
     fn record(&self, event: CodecEvent);
+
+    /// Whether the hook wants the phase timings at all.
+    ///
+    /// The encoder shapes its hot loops around this answer: a hook that
+    /// answers `false` gets no per-row clock reads (the phases are not
+    /// recorded, and the loops run without them). A hook that wants the
+    /// histogram answers `true`. The default is `true`, so a hook that only
+    /// implements [`Telemetry::record`] keeps receiving every event.
+    fn wants_phases(&self) -> bool {
+        true
+    }
 }
 
 /// The default: nothing is measured.
@@ -81,6 +92,10 @@ pub struct NoTelemetry;
 
 impl Telemetry for NoTelemetry {
     fn record(&self, _event: CodecEvent) {}
+
+    fn wants_phases(&self) -> bool {
+        false
+    }
 }
 
 /// A shared telemetry hook.
