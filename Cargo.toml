@@ -13,15 +13,20 @@ categories = ["encoding", "multimedia::images"]
 publish = false
 
 [features]
-default = ["cli"]
+default = ["cli", "metrics"]
 # The command-line tool: the JSON form it prints and the measurements it
 # takes. It is on by default because the tool is part of what this crate
 # ships — `cargo install --path .` must give a person the codec's tool — and
 # because a gate that does not build the tool does not gate it.
 cli = ["dep:serde_json"]
+# Prometheus-style metrics export.
+metrics = []
+# Parallel dirty-tile detection (rayon).
+parallel = ["dep:rayon"]
 
 [dependencies]
 flate2 = "1"
+rayon = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
 
 [[bin]]

@@ -208,6 +208,52 @@ pub fn office(width: u32, height: u32, seed: u32) -> CapturedFrame {
     frame
 }
 
+/// A terminal: dark background, monospace text, cursor.
+pub fn terminal(width: u32, height: u32, seed: u32) -> CapturedFrame {
+    let mut frame = plain(width, height, [16, 18, 24, 255]);
+    let cols = (width / 8).max(1);
+    let rows = (height / 16).max(1);
+    for r in 0..rows {
+        let y = r * 16;
+        if y + 12 < height {
+            text_line(&mut frame, 8, y, cols.min(120), seed.wrapping_add(r));
+        }
+    }
+    // cursor block
+    let cx = 8 + (seed % cols.max(1)) as u32 * 8;
+    let cy = (seed / cols.max(1)) as u32 % rows.max(1) * 16;
+    fill_rect(&mut frame, cx, cy, 8, 16, [200, 200, 210, 255]);
+    frame
+}
+
+/// A dashboard: grid of panels with charts and tables.
+pub fn dashboard(width: u32, height: u32, seed: u32) -> CapturedFrame {
+    let mut frame = plain(width, height, [248, 248, 250, 255]);
+    let cols = 3u32;
+    let rows = 2u32;
+    let pw = width / cols;
+    let ph = height / rows;
+    for cy in 0..rows {
+        for cx in 0..cols {
+            let x = cx * pw;
+            let y = cy * ph;
+            fill_rect(&mut frame, x + 2, y + 2, pw - 4, ph - 4, [255, 255, 255, 255]);
+            // header bar
+            fill_rect(&mut frame, x + 2, y + 2, pw - 4, 24, [60, 64, 72, 255]);
+            // chart area
+            let chart_x = x + 12;
+            let chart_y = y + 32;
+            let chart_w = pw - 24;
+            let chart_h = ph - 48;
+            for i in 0..chart_w {
+                let h = (i as u32 * 7 + seed + cx * 13 + cy * 31) % chart_h.max(1);
+                fill_rect(&mut frame, chart_x + i, chart_y + (chart_h - h), 1, h.max(1), [70, 130, 180, 255]);
+            }
+        }
+    }
+    frame
+}
+
 /// A document of identical text lines spaced 20 rows apart.
 ///
 /// Identical lines are what a table, a log, or a code listing looks like, and

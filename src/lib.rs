@@ -41,6 +41,10 @@ pub mod error;
 pub mod format;
 pub mod frame;
 pub mod measured;
+#[cfg(feature = "metrics")]
+pub mod metrics;
+#[cfg(feature = "metrics")]
+pub use metrics::PrometheusTelemetry;
 pub mod ops;
 pub mod part;
 pub mod reference;
