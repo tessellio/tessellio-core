@@ -71,7 +71,7 @@ mod tests {
     fn render_contains_metrics() {
         let t = PrometheusTelemetry::default();
         t.record(CodecEvent::PhaseElapsed {
-            phase: crate::telemetry::EncodePhase::Total,
+            phase: crate::telemetry::EncodePhase::Compress,
             elapsed: std::time::Duration::from_millis(1),
         });
         t.add_bytes(100);
