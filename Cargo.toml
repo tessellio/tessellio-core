@@ -6,6 +6,7 @@ rust-version = "1.88"
 description = "Tessellio: a screen codec that paints a surface as independently-placed tiles of cells, chained against a reference so a lost update heals."
 license = "PolyForm-Noncommercial-1.0.0"
 repository = "https://github.com/tessellio/tessellio-core"
+documentation = "https://docs.rs/tessellio-core"
 readme = "README.md"
 keywords = ["codec", "screen", "compression", "remote-desktop", "real-time"]
 categories = ["encoding", "multimedia::images"]
