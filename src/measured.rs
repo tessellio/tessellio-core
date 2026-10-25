@@ -22,6 +22,12 @@ pub const SCROLL_MAX_BYTES: usize = 5_120;
 /// A 1680×920 page scrolled 40 px: 16 380 bytes, and it stays a chained
 /// update.
 pub const FULL_WIDTH_SCROLL_MAX_BYTES: usize = 20_480;
+/// A viewport whose every line moved (a shift off the line period): the
+/// whole-viewport-dirty scroll, the transport's real scroll load. Measured
+/// on the reference implementation.
+pub const VIEWPORT_SHIFT_MAX_BYTES: usize = 16_384;
+/// The full-width form of the same shift.
+pub const PAGE_SHIFT_MAX_BYTES: usize = 40_960;
 /// A 640×360 block of high-entropy content: 259 918 bytes in the update that
 /// carries it.
 pub const NOISE_FRAME_MAX_BYTES: usize = 266_240;

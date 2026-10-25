@@ -136,9 +136,10 @@ impl PendingRgba {
     /// lookups, not half a million.
     pub fn push_row(&mut self, row: u32, rgba: &[u8]) {
         if let Some(last) = self.rows.last()
-            && last.0 >= row {
-                self.sorted = false;
-            }
+            && last.0 >= row
+        {
+            self.sorted = false;
+        }
         if let Some(offset) = self.offset_of(row) {
             // A repeat means a repair pass re-converted the row, and the
             // later capture bytes are the ones the plan's writes will name.

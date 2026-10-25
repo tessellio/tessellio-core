@@ -18,8 +18,8 @@ use crate::cli::{CliError, Options, Produced, json_line, table};
 use crate::measured::{
     CHAINED_ENCODE_MAX_MS, CHAINED_ENCODE_MAX_MS_DEBUG, CURSOR_1PX_MAX_BYTES,
     CURSOR_16PX_MAX_BYTES, DRAG_MAX_BYTES, FULL_WIDTH_SCROLL_MAX_BYTES, MIX_MAX_BYTES,
-    NOISE_FRAME_MAX_BYTES, RESET_ENCODE_MAX_MS, RESET_ENCODE_MAX_MS_DEBUG, RESET_FRAME_MAX_BYTES,
-    SCROLL_MAX_BYTES, TYPING_MAX_BYTES,
+    NOISE_FRAME_MAX_BYTES, PAGE_SHIFT_MAX_BYTES, RESET_ENCODE_MAX_MS, RESET_ENCODE_MAX_MS_DEBUG,
+    RESET_FRAME_MAX_BYTES, SCROLL_MAX_BYTES, TYPING_MAX_BYTES, VIEWPORT_SHIFT_MAX_BYTES,
 };
 use crate::scene::{
     desktop_with_window, document, draw_cursor, fill_rect, noise_block, office, scroll_viewport,
@@ -206,6 +206,32 @@ fn scenarios() -> Vec<Scenario> {
                 let mut frame = document(1920, 1080);
                 let base = encode(encoder, &frame, 1);
                 scroll_viewport(&mut frame, 120, 60, 1680, 920, 40, 6);
+                let (update, elapsed) = timed(encoder, &frame, 2);
+                bytes_of(&base, &update, &frame, elapsed)
+            },
+        },
+        Scenario {
+            name: "viewport_shift_30",
+            summary: "a 900×620 viewport shifted 30 pixels (not the line period: every line moves)",
+            byte_budget: VIEWPORT_SHIFT_MAX_BYTES as f64,
+            time_budget_ms: chained_budget_ms(),
+            run: |encoder| {
+                let mut frame = document(1920, 1080);
+                let base = encode(encoder, &frame, 1);
+                scroll_viewport(&mut frame, 200, 100, 900, 620, 30, 5);
+                let (update, elapsed) = timed(encoder, &frame, 2);
+                bytes_of(&base, &update, &frame, elapsed)
+            },
+        },
+        Scenario {
+            name: "page_shift_30",
+            summary: "a 1680×920 page shifted 30 pixels (not the line period)",
+            byte_budget: PAGE_SHIFT_MAX_BYTES as f64,
+            time_budget_ms: chained_budget_ms(),
+            run: |encoder| {
+                let mut frame = document(1920, 1080);
+                let base = encode(encoder, &frame, 1);
+                scroll_viewport(&mut frame, 120, 60, 1680, 920, 30, 6);
                 let (update, elapsed) = timed(encoder, &frame, 2);
                 bytes_of(&base, &update, &frame, elapsed)
             },

@@ -575,10 +575,9 @@ impl ScreenStreamEncoder {
                             .shadow
                             .as_ref()
                             .is_some_and(|shadow| shadow.row_valid(row));
-                        if valid
-                            && let Some(shadow) = self.shadow.as_mut() {
-                                shadow.write_columns(row, column as u32, cells, bytes);
-                            }
+                        if valid && let Some(shadow) = self.shadow.as_mut() {
+                            shadow.write_columns(row, column as u32, cells, bytes);
+                        }
                     }
                     None => {
                         if let Some(shadow) = self.shadow.as_mut() {
@@ -1292,6 +1291,22 @@ fn record_writes(row: u32, width: u32, x0: u32, spans: &[Span], out: &mut Vec<Wr
             out.push(WriteSpan::new(offset, span.len));
         }
     }
+}
+
+/// FNV-1a over a row's cells (the COPY_ROW detector's key: a 64-bit content
+/// hash, with the byte-identical comparison the decoder's copy itself makes
+/// exact — a hash collision costs a wrong row, so the detector confirms the
+/// hit by comparing the cells before emitting).
+fn fnv1a(cells: &[u16]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for cell in cells {
+        let bytes = cell.to_le_bytes();
+        for byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
 }
 
 /// Cell count below which the sequential convert-and-compare pass is the
