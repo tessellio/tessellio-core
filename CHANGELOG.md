@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Changed
+- **`update_base` is `base_update_id` everywhere** — the field name the
+  schema, the specification and the TypeScript receiver already use. The
+  wire tag is untouched: the corpus regenerates bit-for-bit.
+- `docs/wire-format.md` carried the pre-freeze limits (4096, 16 MiB, 256
+  regions, 16 parts); it now lists the frozen ones (8192, 3 932 160, 64, 8)
+  and the rest of the limit table.
+- The README's quickstart taught the removed two-argument `encode`, its
+  dependency line forgot `miniz_oxide`, its examples section listed itself
+  twice with three different counts, and its module table omitted `shadow`
+  and `metrics`. The measured reset bound is the shadow commit's own
+  82 699 bytes, not the 82 799 the hybrid backend replaced.
+
 ### Added
 - `changed_cell_indices` in `EncodedUpdate` and `PlannedUpdate` for transport
   cell accounting.

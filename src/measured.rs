@@ -34,7 +34,7 @@ pub const NOISE_FRAME_MAX_BYTES: usize = 266_240;
 /// The weighted interactive mix (pointer 50 %, typing 20 %, scroll 15 %, drag
 /// 10 %): 777 bytes per update.
 pub const MIX_MAX_BYTES: usize = 1_024;
-/// A 1080p office self-contained update: 82 799 bytes.
+/// A 1080p office self-contained update: 82 699 bytes at zlib-ng level 6.
 pub const RESET_FRAME_MAX_BYTES: usize = 98_304;
 
 /// The cost of a chained update's encode, in an optimized build.
@@ -77,7 +77,7 @@ mod tests {
             assert!(FULL_WIDTH_SCROLL_MAX_BYTES > 16_380);
             assert!(NOISE_FRAME_MAX_BYTES > 259_918);
             assert!(MIX_MAX_BYTES > 777);
-            assert!(RESET_FRAME_MAX_BYTES > 82_799);
+            assert!(RESET_FRAME_MAX_BYTES > 82_699);
         }
     }
 

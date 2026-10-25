@@ -124,7 +124,7 @@ fn region_json(region: &Region) -> Value {
 fn part_json(part: &Part) -> Value {
     json!({
         "updateId": part.update_id,
-        "baseUpdateId": part.update_base,
+        "baseUpdateId": part.base_update_id,
         "width": part.width,
         "height": part.height,
         "partIndex": part.part_index,
@@ -138,7 +138,7 @@ fn part_json(part: &Part) -> Value {
 /// One frame's JSON, with its canvas expectation.
 fn frame_json(
     update_id: u64,
-    update_base: u64,
+    base_update_id: u64,
     parts: Vec<Part>,
     canvas: &SurfaceCanvas,
     full_cells: bool,
@@ -159,7 +159,7 @@ fn frame_json(
     };
     json!({
         "updateId": update_id,
-        "baseUpdateId": update_base,
+        "baseUpdateId": base_update_id,
         "width": parts.first().map_or(0, |part| part.width),
         "height": parts.first().map_or(0, |part| part.height),
         "parts": parts
@@ -260,15 +260,15 @@ fn hand_built_delta_case(
     let base_payload = deflate_ops(base_ops, level).expect("deflate");
     let delta_payload = deflate_ops(delta_ops, level).expect("deflate");
     let mut canvas = SurfaceCanvas::new();
-    // The oracle derives the coverage mode from `update_base`, exactly as
+    // The oracle derives the coverage mode from `base_update_id`, exactly as
     // §4.5 requires: full for a reset frame, sparse for a delta.
-    for (update_id, update_base, payload) in [
+    for (update_id, base_update_id, payload) in [
         (1_u64, 0_u64, base_payload.clone()),
         (2, 1, delta_payload.clone()),
     ] {
         let frame = EncodedUpdate {
             update_id,
-            update_base,
+            base_update_id,
             width,
             height,
             codec: Codec::Tessellio,
@@ -711,7 +711,7 @@ fn corpus() -> Value {
             let size = regions.len() / groups + usize::from(index < regions.len() % groups);
             parts.push(Part {
                 update_id: 1,
-                update_base: 0,
+                base_update_id: 0,
                 width: frame.width,
                 height: frame.height,
                 part_index: index as u32,
@@ -734,7 +734,7 @@ fn corpus() -> Value {
         let assembled = assembled.expect("the four parts assemble");
         let encoded = EncodedUpdate {
             update_id: 1,
-            update_base: 0,
+            base_update_id: 0,
             width: frame.width,
             height: frame.height,
             codec: Codec::Tessellio,
@@ -946,7 +946,7 @@ fn corpus() -> Value {
     // -- part-level error cases ------------------------------------------
     let good = Part {
         update_id: 10,
-        update_base: 9,
+        base_update_id: 9,
         width: 64,
         height: 48,
         part_index: 0,
@@ -968,7 +968,7 @@ fn corpus() -> Value {
     cases.push(part_error_case("part-bad-id", "DECODE_ERROR", part));
 
     let mut part = good.clone();
-    part.update_base = 99;
+    part.base_update_id = 99;
     cases.push(part_error_case("part-bad-base", "BASE_MISMATCH", part));
 
     let mut part = good.clone();
@@ -1054,7 +1054,7 @@ fn corpus() -> Value {
     {
         let mut other = first.clone();
         other.update_id = 11;
-        other.update_base = 10;
+        other.base_update_id = 10;
         other.part_index = 1;
         cases.push(assembly_error_case(
             "assembly-interrupted",

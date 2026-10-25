@@ -3,7 +3,7 @@
 //!
 //! A frame is split at region boundaries only — a region is never split — and
 //! every part carries the whole frame's identity (`update_id`,
-//! `update_base`, geometry, `part_count`, `update_bytes`) so any receiver can
+//! `base_update_id`, geometry, `part_count`, `update_bytes`) so any receiver can
 //! prove atomicity without holding partial frames. [`validate_part`] and
 //! [`UpdateAssembler`] implement §4.5's receiver rules in Rust; they are the
 //! model-test and corpus oracle, and mirror what the hops and the browser must
@@ -23,7 +23,7 @@ pub struct Part {
     /// Frame id (`>= 1`), replicated in every part.
     pub update_id: u64,
     /// Frame this delta applies onto; `0` marks a reset frame.
-    pub update_base: u64,
+    pub base_update_id: u64,
     /// Frame width in cells.
     pub width: u32,
     /// Frame height in cells.
@@ -125,7 +125,7 @@ impl UpdateSplitter {
             .enumerate()
             .map(|(index, regions)| Part {
                 update_id: frame.update_id,
-                update_base: frame.update_base,
+                base_update_id: frame.base_update_id,
                 width: frame.width,
                 height: frame.height,
                 part_index: index as u32,
@@ -145,7 +145,7 @@ pub enum PartRejection {
     UnknownCodec,
     /// `update_id` is zero.
     BadId,
-    /// `update_base` is neither zero nor below `update_id`.
+    /// `base_update_id` is neither zero nor below `update_id`.
     BadBase,
     /// Dimensions are outside the format limits.
     BadGeometry,
@@ -197,7 +197,7 @@ pub fn validate_part(part: &Part) -> Result<(), PartRejection> {
     if part.update_id == 0 {
         return Err(PartRejection::BadId);
     }
-    if part.update_base != 0 && part.update_base >= part.update_id {
+    if part.base_update_id != 0 && part.base_update_id >= part.update_id {
         return Err(PartRejection::BadBase);
     }
     if part.width == 0
@@ -256,7 +256,7 @@ pub struct AssembledUpdate {
     /// Frame id.
     pub update_id: u64,
     /// Base frame id (`0` = reset frame).
-    pub update_base: u64,
+    pub base_update_id: u64,
     /// Frame width in cells.
     pub width: u32,
     /// Frame height in cells.
@@ -289,7 +289,7 @@ pub struct UpdateAssembler {
 #[derive(Debug)]
 struct PendingFrame {
     update_id: u64,
-    update_base: u64,
+    base_update_id: u64,
     width: u32,
     height: u32,
     part_count: u32,
@@ -347,7 +347,7 @@ impl UpdateAssembler {
         if pending.width != part.width
             || pending.height != part.height
             || pending.part_count != part.part_count
-            || pending.update_base != part.update_base
+            || pending.base_update_id != part.base_update_id
             || pending.update_bytes != part.update_bytes
         {
             self.pending = None;
@@ -381,7 +381,7 @@ impl UpdateAssembler {
         }
         AssemblyOutcome::Complete(AssembledUpdate {
             update_id: pending.update_id,
-            update_base: pending.update_base,
+            base_update_id: pending.base_update_id,
             width: pending.width,
             height: pending.height,
             update_bytes: pending.update_bytes,
@@ -395,7 +395,7 @@ impl PendingFrame {
     fn start(part: &Part) -> Self {
         Self {
             update_id: part.update_id,
-            update_base: part.update_base,
+            base_update_id: part.base_update_id,
             width: part.width,
             height: part.height,
             part_count: part.part_count,
@@ -425,7 +425,7 @@ mod tests {
     fn frame(regions: Vec<Region>) -> EncodedUpdate {
         EncodedUpdate {
             update_id: 10,
-            update_base: 9,
+            base_update_id: 9,
             width: 64,
             height: 48,
             codec: Codec::Tessellio,
@@ -532,7 +532,7 @@ mod tests {
         assert_eq!(validate_part(&part), Err(PartRejection::BadId));
 
         let mut part = base.clone();
-        part.update_base = 11;
+        part.base_update_id = 11;
         assert_eq!(validate_part(&part), Err(PartRejection::BadBase));
 
         let mut part = base.clone();
@@ -625,7 +625,7 @@ mod tests {
         match assembler.push(parts[1].clone()) {
             AssemblyOutcome::Complete(assembled) => {
                 assert_eq!(assembled.update_id, 10);
-                assert_eq!(assembled.update_base, 9);
+                assert_eq!(assembled.base_update_id, 9);
                 assert_eq!(assembled.update_bytes, 16);
                 assert_eq!(assembled.regions.len(), 2);
                 assert_eq!(assembled.parts, 2);
@@ -639,7 +639,7 @@ mod tests {
         let mut assembler = UpdateAssembler::new();
         let part = Part {
             update_id: 10,
-            update_base: 9,
+            base_update_id: 9,
             width: 64,
             height: 48,
             part_index: 1,
@@ -659,7 +659,7 @@ mod tests {
         let mut assembler = UpdateAssembler::new();
         let mut part = Part {
             update_id: 10,
-            update_base: 9,
+            base_update_id: 9,
             width: 64,
             height: 48,
             part_index: 0,
@@ -704,7 +704,7 @@ mod tests {
         let mut assembler = UpdateAssembler::new();
         let mut part = Part {
             update_id: 10,
-            update_base: 9,
+            base_update_id: 9,
             width: 64,
             height: 48,
             part_index: 0,
@@ -716,7 +716,7 @@ mod tests {
         assert_eq!(assembler.push(part.clone()), AssemblyOutcome::Pending);
         // A later part of another frame interrupts the partial frame.
         part.update_id = 11;
-        part.update_base = 10;
+        part.base_update_id = 10;
         part.part_index = 1;
         assert_eq!(
             assembler.push(part.clone()),
@@ -736,7 +736,7 @@ mod tests {
         let mut assembler = UpdateAssembler::new();
         let part = Part {
             update_id: 10,
-            update_base: 9,
+            base_update_id: 9,
             width: 64,
             height: 48,
             part_index: 0,

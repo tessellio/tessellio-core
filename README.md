@@ -27,18 +27,21 @@ canvas equals the sender's reference for the update the receiver has applied.
 | `encode` | the stream encoder, the refresh budget, and commit |
 | `reset` | band-parallel self-contained updates |
 | `reference` | the reference surface and its undo journal |
+| `shadow` | the RGBA shadow: clean rows settle with one memcmp before any conversion |
 | `part` | the update's parts: splitting, validation, and assembly |
 | `decode` | the decoder, the bounded op walk, and the surface oracle |
 | `telemetry` | what the codec measures, and how a caller collects it |
+| `metrics` | the Prometheus export |
 | `error` | the codec's error vocabulary |
 | `scene` | the reference scenes the codec is measured on |
 | `measured` | the reference implementation's measured byte bounds |
 | `cli` | the command-line tool: the grammar, the JSON shapes, the bench |
 
 The crate is sans-I/O: it never opens a socket, never reads a clock for
-anything but a measurement, and never touches the filesystem. The only
-dependency is `flate2`, for the DEFLATE envelope; the command-line tool adds
-`serde_json`, for the JSON it prints.
+anything but a measurement, and never touches the filesystem. The DEFLATE
+envelope has two engines — `flate2` (zlib-ng) for the deep levels and
+`miniz_oxide` for the fast one — and the command-line tool adds `serde_json`,
+for the JSON it prints.
 
 ## The command-line tool
 
@@ -97,7 +100,8 @@ Build it with `cargo build --release`; the binary is
 use tessellio_core::{CodecConfig, ScreenStreamEncoder};
 
 let mut encoder = ScreenStreamEncoder::new(CodecConfig::default());
-let update = encoder.encode(&captured, 1)?;
+let planned = encoder.encode(&captured)?;
+let update = encoder.commit(planned, next_update_id)?;
 ```
 
 The encoder is the only stateful part: it keeps the reference surface, and it
@@ -129,16 +133,8 @@ it does.
 
 ## Examples
 
-See `examples/` directory. Run with `cargo run --example <name>`:
-basic, decode, telemetry, parts, scene, convert, detect, ops, format,
-reference, frame, reset, error.
-
-## Examples
-
-See `examples/` directory (22 examples). Run with `cargo run --example <name>`:
-basic, decode, telemetry, parts, scene, convert, detect, ops, format,
-reference, frame, reset, error, full, bench, pointer, scroll, fill, text,
-noise, lcg, cursor_at, scroll_viewport, composite_pointer.
+See `examples/` (24 examples). Run with `cargo run --example <name>`:
+basic, bench, composite_pointer, convert, cor_at.rs, decode, detect, error, fill, format, frame, full, lcg, noise, ops, parts, pointer, reference, reset, scene, scroll, scroll_viewport, telemetry, text.
 
 ## Verifying it
 

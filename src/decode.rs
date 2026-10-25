@@ -16,7 +16,7 @@ use crate::ops::{OP_END, OP_FILL, OP_ROW, OP_SPAN};
 /// Coverage rule a region is decoded under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Coverage {
-    /// `update_base == 0`: every row is written exactly once and completely.
+    /// `base_update_id == 0`: every row is written exactly once and completely.
     Full,
     /// Delta frame: rows and runs may be sparse, but order rules still hold.
     Sparse,
@@ -199,11 +199,11 @@ impl SurfaceCanvas {
     /// canvas untouched.
     pub fn apply(&mut self, frame: &EncodedUpdate) -> Result<(), DecodeError> {
         // R0: a delta for a frame the canvas already holds or passes is stale.
-        if frame.update_base != 0 && frame.update_id <= self.applied_update_id {
+        if frame.base_update_id != 0 && frame.update_id <= self.applied_update_id {
             return Ok(());
         }
         let geometry = (frame.width, frame.height);
-        if frame.update_base == 0 {
+        if frame.base_update_id == 0 {
             // R1: a reset frame is geometry-authoritative. An unchanged geometry
             // keeps the existing content; a changed one clears to black.
             if self.geometry() != Some(geometry) {
@@ -213,7 +213,7 @@ impl SurfaceCanvas {
             return Err(DecodeError::BadValue);
         }
         // R2: a delta must apply onto exactly the frame the canvas holds.
-        if frame.update_base != 0 && frame.update_base != self.applied_update_id {
+        if frame.base_update_id != 0 && frame.base_update_id != self.applied_update_id {
             return Err(DecodeError::BadValue);
         }
         if frame.regions.is_empty() {
@@ -239,7 +239,7 @@ impl SurfaceCanvas {
         let Some(stage) = self.stage.as_mut() else {
             return Err(DecodeError::BadValue);
         };
-        let coverage = if frame.update_base == 0 {
+        let coverage = if frame.base_update_id == 0 {
             Coverage::Full
         } else {
             Coverage::Sparse

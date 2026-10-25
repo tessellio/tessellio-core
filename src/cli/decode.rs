@@ -55,7 +55,7 @@ pub fn decode(options: &Options, json: bool) -> Result<Produced, CliError> {
     for envelope in &envelopes {
         let part = Part {
             update_id: envelope.update_id,
-            update_base: envelope.update_base,
+            base_update_id: envelope.base_update_id,
             width: envelope.width,
             height: envelope.height,
             part_index: envelope.part_index,
@@ -69,7 +69,7 @@ pub fn decode(options: &Options, json: bool) -> Result<Produced, CliError> {
             AssemblyOutcome::Complete(assembled) => {
                 let update = EncodedUpdate {
                     update_id: assembled.update_id,
-                    update_base: assembled.update_base,
+                    base_update_id: assembled.base_update_id,
                     width: assembled.width,
                     height: assembled.height,
                     codec: Codec::Tessellio,
@@ -144,7 +144,7 @@ pub fn decode(options: &Options, json: bool) -> Result<Produced, CliError> {
 fn envelope_value(envelope: &Envelope) -> Value {
     json!({
         "update_id": envelope.update_id,
-        "update_base": envelope.update_base,
+        "base_update_id": envelope.base_update_id,
         "width": envelope.width,
         "height": envelope.height,
         "part_index": envelope.part_index,
@@ -251,7 +251,7 @@ fn render_envelope(envelope: &Envelope, bytes_len: usize) -> String {
     text.push_str("update inspected\n");
     text.push_str(&format!("  bytes            {bytes_len}\n"));
     text.push_str(&format!("  update id        {}\n", envelope.update_id));
-    text.push_str(&format!("  update base      {}\n", envelope.update_base));
+    text.push_str(&format!("  update base      {}\n", envelope.base_update_id));
     text.push_str(&format!(
         "  geometry         {}x{}\n",
         envelope.width, envelope.height
@@ -369,7 +369,7 @@ mod tests {
     fn part_hex(update_id: u64, base: u64, width: u32, height: u32) -> String {
         let envelope = Envelope {
             update_id,
-            update_base: base,
+            base_update_id: base,
             width,
             height,
             part_index: 0,

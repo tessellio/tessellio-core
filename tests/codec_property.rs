@@ -93,7 +93,7 @@ proptest! {
         let mut canvas = SurfaceCanvas::new();
         let base_frame = frame_from_565(width, height, &base);
         let reset = encode_frame(&mut encoder, &base_frame, 1);
-        prop_assert_eq!(reset.update_base, 0);
+        prop_assert_eq!(reset.base_update_id, 0);
         canvas.apply(&reset).expect("self-contained applies");
         prop_assert_eq!(canvas.cells(), encoder.reference_cells());
         prop_assert_eq!(canvas.cells(), expect565(&base_frame));
@@ -176,7 +176,7 @@ proptest! {
             prop_assert_eq!(replica.applied_update_id(), held);
 
             let planned = encoder.rebase_and_encode(held, &next_frame).expect("rebase").expect("frame");
-            prop_assert_eq!(planned.update_base, held);
+            prop_assert_eq!(planned.base_update_id, held);
             let rebased = encoder.commit(planned, reference_id + 1);
             replica.apply(&rebased).expect("rebased frame applies");
 
@@ -462,7 +462,7 @@ fn deliver(
             AssemblyOutcome::Complete(assembled) => {
                 let frame = tessellio_core::EncodedUpdate {
                     update_id: assembled.update_id,
-                    update_base: assembled.update_base,
+                    base_update_id: assembled.base_update_id,
                     width: assembled.width,
                     height: assembled.height,
                     codec: tessellio_core::Codec::Tessellio,

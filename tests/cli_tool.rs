@@ -106,7 +106,7 @@ fn the_json_shape_is_stable() {
     let document = json_of(&built);
     assert_eq!(document["command"], "encode");
     assert_eq!(document["update"]["update_id"], 1);
-    assert_eq!(document["update"]["update_base"], 0);
+    assert_eq!(document["update"]["base_update_id"], 0);
     assert_eq!(document["update"]["kind"], "self-contained");
     assert_eq!(document["update"]["width"], 64);
     assert_eq!(document["update"]["height"], 48);

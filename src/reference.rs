@@ -56,7 +56,7 @@ pub struct JournalEntry {
     /// Frame that produced this undo.
     pub update_id: u64,
     /// State this undo returns to.
-    pub update_base: u64,
+    pub base_update_id: u64,
     /// Segments in write order.
     pub segments: Vec<UndoSegment>,
     /// Sum of segment value bytes.
@@ -65,11 +65,11 @@ pub struct JournalEntry {
 
 impl JournalEntry {
     /// Build an entry from its segments.
-    pub fn new(update_id: u64, update_base: u64, segments: Vec<UndoSegment>) -> Self {
+    pub fn new(update_id: u64, base_update_id: u64, segments: Vec<UndoSegment>) -> Self {
         let bytes = segments.iter().map(UndoSegment::bytes).sum();
         Self {
             update_id,
-            update_base,
+            base_update_id,
             segments,
             bytes,
         }
@@ -141,7 +141,7 @@ impl ReferenceJournal {
             if entry.update_id != current {
                 return false;
             }
-            current = entry.update_base;
+            current = entry.base_update_id;
         }
         current == held
     }
@@ -167,7 +167,7 @@ impl ReferenceJournal {
                 }
                 buffer.as_mut_u16()[start..end].copy_from_slice(&segment.values);
             }
-            current = entry.update_base;
+            current = entry.base_update_id;
         }
         current == held
     }

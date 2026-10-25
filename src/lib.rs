@@ -1,8 +1,8 @@
 //! The Tessellio screen codec.
 //!
 //! Tessellio paints a surface as tiles of cells and moves only the tiles that
-//! changed. An **update** is either **self-contained** (`update_base == 0`: it
-//! establishes the whole surface) or **chained** (`update_base > 0`: it
+//! changed. An **update** is either **self-contained** (`base_update_id == 0`: it
+//! establishes the whole surface) or **chained** (`base_update_id > 0`: it
 //! continues exactly the surface the named base established). A region's
 //! content is an op stream (`ROW`/`SPAN`/`FILL`/`END`) inside a raw-DEFLATE
 //! envelope.

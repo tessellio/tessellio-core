@@ -144,7 +144,7 @@ pub struct EncodedUpdate {
     /// Monotonic frame id assigned by the pipeline.
     pub update_id: u64,
     /// Frame this delta applies onto; `0` marks a reset frame.
-    pub update_base: u64,
+    pub base_update_id: u64,
     /// Frame width in cells.
     pub width: u32,
     /// Frame height in cells.
@@ -169,7 +169,7 @@ pub struct EncodedUpdate {
 impl EncodedUpdate {
     /// Frame kind used by metrics and the splitter.
     pub fn kind(&self) -> UpdateKind {
-        if self.update_base == 0 {
+        if self.base_update_id == 0 {
             UpdateKind::Reset
         } else if self.regions.is_empty() {
             UpdateKind::Empty
@@ -185,14 +185,14 @@ impl EncodedUpdate {
 
     /// Whether this frame is self-contained.
     pub fn is_reset(&self) -> bool {
-        self.update_base == 0
+        self.base_update_id == 0
     }
 }
 
 /// Which buffer the planned writes must be applied to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UpdateTarget {
-    /// The reference buffer, which already holds `update_base`.
+    /// The reference buffer, which already holds `base_update_id`.
     Masked,
     /// The rebase scratch, which must then become the reference.
     RebaseScratch,
@@ -203,7 +203,7 @@ enum UpdateTarget {
 /// A frame that has been planned and encoded but not yet assigned an id.
 pub struct PlannedUpdate {
     /// Base frame the receiver must hold.
-    pub update_base: u64,
+    pub base_update_id: u64,
     regions: Vec<Region>,
     writes: Vec<WriteSpan>,
     undo: Vec<UndoSegment>,
@@ -221,7 +221,7 @@ impl std::fmt::Debug for PlannedUpdate {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PlannedUpdate")
-            .field("update_base", &self.update_base)
+            .field("base_update_id", &self.base_update_id)
             .field("width", &self.width)
             .field("height", &self.height)
             .field("regions", &self.regions.len())
@@ -432,7 +432,7 @@ impl ScreenStreamEncoder {
     /// Assign the frame id, commit the reference update, and journal the undo.
     pub fn commit(&mut self, planned: PlannedUpdate, update_id: u64) -> EncodedUpdate {
         let PlannedUpdate {
-            update_base,
+            base_update_id,
             regions,
             writes,
             undo,
@@ -488,11 +488,11 @@ impl ScreenStreamEncoder {
         // name the cells the reference just took, and the plan's retained
         // rows carry the RGBA those cells came from.
         self.maintain_shadow(update, &writes, width, height);
-        if update_base == 0 {
+        if base_update_id == 0 {
             self.journal.clear(update_id);
         } else {
             self.journal
-                .push(JournalEntry::new(update_id, update_base, undo));
+                .push(JournalEntry::new(update_id, base_update_id, undo));
         }
         self.reference_update_id = update_id;
         // Return the write staging buffer to the encoder (clear, do not free).
@@ -505,7 +505,7 @@ impl ScreenStreamEncoder {
         );
         EncodedUpdate {
             update_id,
-            update_base,
+            base_update_id,
             width,
             height,
             codec: Codec::Tessellio,
@@ -970,7 +970,7 @@ impl ScreenStreamEncoder {
             reset_indices.extend(span.offset..span.offset + span.len);
         }
         Ok(Some(PlannedUpdate {
-            update_base: 0,
+            base_update_id: 0,
             regions,
             writes,
             undo: Vec::new(),
@@ -997,7 +997,7 @@ impl ScreenStreamEncoder {
     fn plan_delta(
         &mut self,
         frame: &CapturedFrame,
-        update_base: u64,
+        base_update_id: u64,
         base: DeltaBase,
     ) -> Result<Option<PlannedUpdate>, CodecError> {
         let reference_update_id = self.reference_update_id;
@@ -1023,14 +1023,14 @@ impl ScreenStreamEncoder {
             let within_idle = self
                 .last_frame_at
                 .is_some_and(|at| at.elapsed() < self.config.idle_update_interval);
-            if update_base == reference_update_id && within_idle {
+            if base_update_id == reference_update_id && within_idle {
                 return Ok(None);
             }
             self.last_frame_at = Some(Instant::now());
             let mut writes = std::mem::take(&mut self.writes);
             writes.clear();
             return Ok(Some(PlannedUpdate {
-                update_base,
+                base_update_id,
                 regions: Vec::new(),
                 writes,
                 undo: Vec::new(),
@@ -1254,7 +1254,7 @@ impl ScreenStreamEncoder {
             delta_indices.extend(span.offset..span.offset + span.len);
         }
         Ok(Some(PlannedUpdate {
-            update_base,
+            base_update_id,
             regions,
             writes,
             undo,
@@ -1655,7 +1655,7 @@ mod tests {
         let encoded = encoder.commit(planned, 2);
         assert_eq!(encoded.kind(), UpdateKind::Empty);
         assert!(encoded.regions.is_empty());
-        assert_eq!(encoded.update_base, 1);
+        assert_eq!(encoded.base_update_id, 1);
         assert_eq!(encoded.payload_bytes(), 0);
     }
 
@@ -1669,7 +1669,7 @@ mod tests {
 
         fill_rect(&mut frame, 101, 100, 14, 22, [255, 255, 255, 255]);
         let planned = encoder.encode(&frame).unwrap().unwrap();
-        assert_eq!(planned.update_base, 1);
+        assert_eq!(planned.base_update_id, 1);
         let encoded = encoder.commit(planned, 2);
         assert!(!encoded.is_reset());
         assert!(encoded.changed_cells > 0);
@@ -1778,9 +1778,9 @@ mod tests {
         };
         assert!(encoder.journal_can_reach(held));
         let planned = encoder.rebase_and_encode(held, &next).unwrap().unwrap();
-        assert_eq!(planned.update_base, held);
+        assert_eq!(planned.base_update_id, held);
         let rebased = encoder.commit(planned, 6);
-        assert_eq!(rebased.update_base, held);
+        assert_eq!(rebased.base_update_id, held);
         receiver_at_held.apply(&rebased).unwrap();
 
         // The rebased frame paints exactly the source content, cell for cell.

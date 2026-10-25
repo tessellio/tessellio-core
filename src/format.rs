@@ -90,7 +90,7 @@ impl Codec {
 /// Kind of one encoded frame, used for metrics and error reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UpdateKind {
-    /// Self-contained frame (`update_base == 0`).
+    /// Self-contained frame (`base_update_id == 0`).
     Reset,
     /// Frame that applies onto exactly one base frame.
     Delta,

@@ -305,7 +305,7 @@ pub struct Envelope {
     /// The update's id.
     pub update_id: u64,
     /// The update this one continues; `0` is a self-contained update.
-    pub update_base: u64,
+    pub base_update_id: u64,
     /// The surface's width, in cells.
     pub width: u32,
     /// The surface's height, in cells.
@@ -336,7 +336,7 @@ impl Envelope {
 pub fn encode_envelope(envelope: &Envelope) -> Vec<u8> {
     let mut writer = Writer::new();
     writer.int64(1, envelope.update_id as i64);
-    writer.int64(2, envelope.update_base as i64);
+    writer.int64(2, envelope.base_update_id as i64);
     writer.int32(3, envelope.width as i32);
     writer.int32(4, envelope.height as i32);
     writer.int32(5, envelope.part_index as i32);
@@ -363,7 +363,7 @@ pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope, CliError> {
     let mut reader = Reader::new(bytes);
     let mut envelope = Envelope {
         update_id: 0,
-        update_base: 0,
+        base_update_id: 0,
         width: 0,
         height: 0,
         part_index: 0,
@@ -378,7 +378,7 @@ pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope, CliError> {
         let wire_type = (tag & 7) as u32;
         match (field, wire_type) {
             (1, 0) => envelope.update_id = reader.varint()? as u64,
-            (2, 0) => envelope.update_base = reader.varint()? as u64,
+            (2, 0) => envelope.base_update_id = reader.varint()? as u64,
             (3, 0) => envelope.width = reader.varint()? as u32,
             (4, 0) => envelope.height = reader.varint()? as u32,
             (5, 0) => envelope.part_index = reader.varint()? as u32,
@@ -455,7 +455,7 @@ mod tests {
     fn an_envelope_round_trips() {
         let envelope = Envelope {
             update_id: 7,
-            update_base: 1,
+            base_update_id: 1,
             width: 8,
             height: 4,
             part_index: 0,
@@ -478,7 +478,7 @@ mod tests {
     fn a_default_envelope_is_an_empty_message() {
         let envelope = Envelope {
             update_id: 0,
-            update_base: 0,
+            base_update_id: 0,
             width: 0,
             height: 0,
             part_index: 0,
@@ -496,7 +496,7 @@ mod tests {
         // update whose header is `08 07 10 06 18 08 20 04 30 01`.
         let envelope = Envelope {
             update_id: 7,
-            update_base: 6,
+            base_update_id: 6,
             width: 8,
             height: 4,
             part_index: 0,
@@ -519,7 +519,7 @@ mod tests {
         writer.int64(2, 1);
         let envelope = decode_envelope(&writer.into_bytes()).expect("decodes");
         assert_eq!(envelope.update_id, 4);
-        assert_eq!(envelope.update_base, 1);
+        assert_eq!(envelope.base_update_id, 1);
     }
 
     #[test]

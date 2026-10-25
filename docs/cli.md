@@ -74,7 +74,7 @@ to one is a change to the contract.
   "command": "encode",
   "update": {
     "update_id": 1,
-    "update_base": 0,
+    "base_update_id": 0,
     "kind": "self-contained",
     "width": 64,
     "height": 48,
@@ -127,7 +127,7 @@ encoder's own phases: `convert`, `compare`, `spans`, `pack`, `compress`,
   "command": "inspect",
   "envelope": {
     "update_id": 1,
-    "update_base": 0,
+    "base_update_id": 0,
     "width": 64,
     "height": 48,
     "part_index": 0,

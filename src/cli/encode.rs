@@ -96,7 +96,7 @@ pub fn encode(options: &Options, json: bool) -> Result<Produced, CliError> {
         .iter()
         .map(|part| Envelope {
             update_id: part.update_id,
-            update_base: part.update_base,
+            base_update_id: part.base_update_id,
             width: part.width,
             height: part.height,
             part_index: part.part_index,
@@ -224,7 +224,7 @@ fn read_config(options: &Options) -> Result<CodecConfig, CliError> {
 fn update_value(update: &EncodedUpdate) -> Value {
     json!({
         "update_id": update.update_id,
-        "update_base": update.update_base,
+        "base_update_id": update.base_update_id,
         "kind": update.kind().as_str(),
         "width": update.width,
         "height": update.height,
@@ -373,7 +373,7 @@ fn render(
     let mut text = String::new();
     text.push_str("update encoded\n");
     text.push_str(&format!("  update id        {}\n", update.update_id));
-    text.push_str(&format!("  update base      {}\n", update.update_base));
+    text.push_str(&format!("  update base      {}\n", update.base_update_id));
     text.push_str(&format!("  kind             {}\n", update.kind().as_str()));
     text.push_str(&format!(
         "  geometry         {}x{}\n",

@@ -12,7 +12,7 @@ fn main() {
         println!(
             "reset update: {} bytes, base={}",
             update.payload_bytes(),
-            update.update_base
+            update.base_update_id
         );
     }
 }

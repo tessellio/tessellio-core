@@ -107,7 +107,7 @@ fn canvas_crc(canvas: &SurfaceCanvas) -> u32 {
 fn assembled_frame(assembled: AssembledUpdate) -> EncodedUpdate {
     EncodedUpdate {
         update_id: assembled.update_id,
-        update_base: assembled.update_base,
+        base_update_id: assembled.base_update_id,
         width: assembled.width,
         height: assembled.height,
         codec: Codec::Tessellio,
@@ -126,13 +126,13 @@ fn assembled_frame(assembled: AssembledUpdate) -> EncodedUpdate {
 
 #[test]
 fn v1_empty_delta_advances_the_canvas_without_painting() {
-    // Header: update_id=7, update_base=6, width=8, height=4, part_index=0,
+    // Header: update_id=7, base_update_id=6, width=8, height=4, part_index=0,
     // part_count=1, update_bytes=0, codec=8, regions=[].
     // Documented proto bytes (12): 08 07 10 06 18 08 20 04 30 01 40 08
     // (the proto encoding itself belongs to the schema's generated types).
     let part = Part {
         update_id: 7,
-        update_base: 6,
+        base_update_id: 6,
         width: 8,
         height: 4,
         part_index: 0,
@@ -152,7 +152,7 @@ fn v1_empty_delta_advances_the_canvas_without_painting() {
         other => panic!("expected completion, got {other:?}"),
     };
     assert_eq!(assembled.update_id, 7);
-    assert_eq!(assembled.update_base, 6);
+    assert_eq!(assembled.base_update_id, 6);
     assert_eq!((assembled.width, assembled.height), (8, 4));
     assert!(assembled.regions.is_empty());
 
@@ -162,7 +162,7 @@ fn v1_empty_delta_advances_the_canvas_without_painting() {
     canvas
         .apply(&EncodedUpdate {
             update_id: 6,
-            update_base: 0,
+            base_update_id: 0,
             width: 8,
             height: 4,
             codec: Codec::Tessellio,
@@ -225,7 +225,7 @@ fn v2_literal_run_hex_to_cells_and_back() {
     fill_rect(&mut current, 4, 1, 1, 1, [0, 0, 255, 255]);
     fill_rect(&mut current, 5, 1, 1, 1, [255, 255, 255, 255]);
     let encoded = encode_frame(&mut encoder, &current, 2);
-    assert_eq!(encoded.update_base, 1);
+    assert_eq!(encoded.base_update_id, 1);
     assert_eq!(encoded.regions.len(), 1);
     let region = &encoded.regions[0];
     assert_eq!(
@@ -381,7 +381,7 @@ fn v4_multi_region_sparse_delta_hex_to_cells_and_back() {
     assert_eq!(a_payload.len() + b_payload.len(), 46);
     let part = Part {
         update_id: 9,
-        update_base: 8,
+        base_update_id: 8,
         width: 8,
         height: 4,
         part_index: 0,
@@ -468,7 +468,7 @@ fn v5_parted_frame_hex_to_cells_and_back() {
 
     let part0 = Part {
         update_id: 10,
-        update_base: 9,
+        base_update_id: 9,
         width: 8,
         height: 4,
         part_index: 0,
@@ -485,7 +485,7 @@ fn v5_parted_frame_hex_to_cells_and_back() {
     };
     let part1 = Part {
         update_id: 10,
-        update_base: 9,
+        base_update_id: 9,
         width: 8,
         height: 4,
         part_index: 1,
@@ -556,7 +556,7 @@ fn the_frame_and_part_caps_reject_oversized_input() {
     // A region payload over the wire cap.
     let part = Part {
         update_id: 1,
-        update_base: 0,
+        base_update_id: 0,
         width: 64,
         height: 48,
         part_index: 0,
@@ -636,9 +636,9 @@ fn the_coverage_modes_differ_on_the_same_op_stream() {
 
 #[test]
 fn the_canvas_rejects_a_frame_whose_base_it_does_not_hold() {
-    let frame = |update_id: u64, update_base: u64| EncodedUpdate {
+    let frame = |update_id: u64, base_update_id: u64| EncodedUpdate {
         update_id,
-        update_base,
+        base_update_id,
         width: 8,
         height: 4,
         codec: Codec::Tessellio,
@@ -661,9 +661,9 @@ fn the_canvas_rejects_a_frame_whose_base_it_does_not_hold() {
 
 #[test]
 fn the_canvas_discards_a_stale_delta_without_a_resync() {
-    let frame = |update_id: u64, update_base: u64, region: Option<Region>| EncodedUpdate {
+    let frame = |update_id: u64, base_update_id: u64, region: Option<Region>| EncodedUpdate {
         update_id,
-        update_base,
+        base_update_id,
         width: 8,
         height: 4,
         codec: Codec::Tessellio,
@@ -787,7 +787,7 @@ fn part_from_json(part: &Value) -> Part {
         .collect();
     Part {
         update_id: u64_field(part, "updateId"),
-        update_base: u64_field(part, "baseUpdateId"),
+        base_update_id: u64_field(part, "baseUpdateId"),
         width: u32_field(part, "width"),
         height: u32_field(part, "height"),
         part_index: u32_field(part, "partIndex"),
@@ -826,7 +826,7 @@ fn run_corpus_case(case: &Value) {
                             .collect();
                         Part {
                             update_id,
-                            update_base: base,
+                            base_update_id: base,
                             width,
                             height,
                             part_index: part["index"].as_u64().unwrap_or(0) as u32,
@@ -860,7 +860,7 @@ fn run_corpus_case(case: &Value) {
                 }
                 let assembled = assembled.unwrap_or_else(|| panic!("{id}: frame assembles"));
                 assert_eq!(assembled.update_id, update_id, "{id}");
-                assert_eq!(assembled.update_base, base, "{id}");
+                assert_eq!(assembled.base_update_id, base, "{id}");
                 assert_eq!((assembled.width, assembled.height), (width, height), "{id}");
                 let decoded = assembled_frame(assembled);
                 canvas.apply(&decoded).unwrap_or_else(|error| {
@@ -993,7 +993,7 @@ fn the_parter_replicates_frame_identity_in_every_part() {
         assert_eq!(part.part_count, parts.len() as u32);
         assert_eq!(part.update_bytes, total as u64);
         assert_eq!(part.update_id, 4);
-        assert_eq!(part.update_base, 0);
+        assert_eq!(part.base_update_id, 0);
         assert_eq!(part.codec, Codec::Tessellio);
         assert_eq!(validate_part(part), Ok(()));
     }
