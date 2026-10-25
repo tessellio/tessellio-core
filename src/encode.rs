@@ -33,6 +33,7 @@ use crate::reference::{
     JournalEntry, ReferenceJournal, UndoSegment, WriteSpan, apply_writes, undo_from_spans,
 };
 use crate::reset::encode_bands;
+use crate::shadow::{PendingRgba, RgbaShadow};
 use crate::telemetry::{CodecEvent, EncodePhase, NoTelemetry, SharedTelemetry, Telemetry};
 
 /// Per-region op-stream ceiling for a delta frame.
@@ -273,6 +274,12 @@ pub struct ScreenStreamEncoder {
     writes: Vec<WriteSpan>,
     deflater: Deflater,
     probe_scratch: Vec<u8>,
+    /// The RGBA mirror of the reference (see `shadow.rs`): lets detection
+    /// settle most rows with one memcmp instead of a convert-and-compare.
+    shadow: Option<RgbaShadow>,
+    /// The RGBA rows the outstanding plan retained, consumed by the shadow's
+    /// commit-time maintenance.
+    pending_rgba: PendingRgba,
     detect_workers: Vec<DetectWorker>,
     selfcheck_failures: u64,
     /// Test-only switch that forces every delta plan through the self-check
@@ -325,6 +332,8 @@ impl ScreenStreamEncoder {
             writes: Vec::new(),
             deflater,
             probe_scratch: Vec::new(),
+            shadow: None,
+            pending_rgba: PendingRgba::default(),
             detect_workers: Vec::new(),
             selfcheck_failures: 0,
             #[cfg(test)]
@@ -384,7 +393,7 @@ impl ScreenStreamEncoder {
                     EncodePhase::Convert,
                     convert_started.elapsed(),
                 );
-                self.plan_reset(from_y)
+                self.plan_reset(from_y, frame)
             }
             None => {
                 self.convert_and_detect(frame, DeltaBase::Reference)?;
@@ -475,6 +484,10 @@ impl ScreenStreamEncoder {
                 }
             }
         }
+        // The shadow's commit-time maintenance (see `shadow.rs`): the writes
+        // name the cells the reference just took, and the plan's retained
+        // rows carry the RGBA those cells came from.
+        self.maintain_shadow(update, &writes, width, height);
         if update_base == 0 {
             self.journal.clear(update_id);
         } else {
@@ -503,6 +516,80 @@ impl ScreenStreamEncoder {
             changed_cell_indices,
             reset_reasons,
         }
+    }
+
+    /// Replay a committed plan's writes into the RGBA shadow.
+    ///
+    /// A full-row write (a reset band) establishes the row's shadow from the
+    /// plan's retained RGBA; a partial write onto an already-valid row
+    /// overwrites just its columns; anything the retention cannot vouch for
+    /// withdraws the row (the full convert-and-compare path covers it — the
+    /// shadow only ever makes the encoder slower, never wrong).
+    fn maintain_shadow(
+        &mut self,
+        update: UpdateTarget,
+        writes: &[WriteSpan],
+        width: u32,
+        height: u32,
+    ) {
+        if matches!(update, UpdateTarget::RebaseScratch) {
+            // The new reference was reconstructed from 16-bit undo values:
+            // their RGBA originals are gone, so no row can be vouched for.
+            if let Some(shadow) = self.shadow.as_mut() {
+                shadow.invalidate();
+            }
+            self.pending_rgba.clear();
+            return;
+        }
+        if width == 0 || height == 0 {
+            self.pending_rgba.clear();
+            return;
+        }
+        if !self
+            .shadow
+            .as_ref()
+            .is_some_and(|shadow| shadow.matches(width, height))
+        {
+            self.shadow = Some(RgbaShadow::new(width, height));
+        }
+        let width = width as usize;
+        for span in writes {
+            let mut offset = span.offset as usize;
+            let end = offset.saturating_add(span.len as usize);
+            while offset < end {
+                let row = (offset / width) as u32;
+                let column = offset % width;
+                let cells = (width - column).min(end - offset);
+                let retained = self.pending_rgba.row(row);
+                match retained {
+                    Some(rgba) if column == 0 && cells == width => {
+                        let Some(shadow) = self.shadow.as_mut() else {
+                            break;
+                        };
+                        shadow.set_row(row, rgba);
+                    }
+                    Some(rgba) => {
+                        let start = column * 4;
+                        let bytes = &rgba[start..start + cells * 4];
+                        let valid = self
+                            .shadow
+                            .as_ref()
+                            .is_some_and(|shadow| shadow.row_valid(row));
+                        if valid
+                            && let Some(shadow) = self.shadow.as_mut() {
+                                shadow.write_columns(row, column as u32, cells, bytes);
+                            }
+                    }
+                    None => {
+                        if let Some(shadow) = self.shadow.as_mut() {
+                            shadow.invalidate_row(row);
+                        }
+                    }
+                }
+                offset += cells;
+            }
+        }
+        self.pending_rgba.clear();
     }
 
     /// Journal size in undo value bytes.
@@ -603,6 +690,22 @@ impl ScreenStreamEncoder {
         self.stale_rows.clear();
         self.stale_rows
             .resize((frame.height as usize).div_ceil(64), 0);
+        // A fresh plan retains fresh rows; a plan that never reached a commit
+        // simply loses its retention.
+        self.pending_rgba.clear();
+        // The shadow mirrors the reference at capture fidelity, so it is only
+        // consulted against the reference itself -- never against the rebase
+        // scratch, which is a state the shadow has never seen.
+        let use_shadow = matches!(base, DeltaBase::Reference);
+        if use_shadow {
+            let armed = self
+                .shadow
+                .as_ref()
+                .is_some_and(|shadow| shadow.matches(frame.width, frame.height));
+            if !armed {
+                self.shadow = Some(RgbaShadow::new(frame.width, frame.height));
+            }
+        }
         // The shape of the pass is decided before the borrows start: the
         // worker count and the frame's size are the encoder's own.
         let bands = (frame.height as usize).div_ceil(TILE as usize);
@@ -637,6 +740,8 @@ impl ScreenStreamEncoder {
                     self.detect_workers.resize_with(workers, || DetectWorker {
                         map: ChangeMap::new(),
                         scratch: Vec::new(),
+                        pending: Vec::new(),
+                        pending_rows: Vec::new(),
                     });
                 }
                 for worker in &mut self.detect_workers {
@@ -652,72 +757,70 @@ impl ScreenStreamEncoder {
                     change_map,
                     &mut self.stale_rows,
                     &mut self.detect_workers,
+                    use_shadow.then_some(self.shadow.as_ref()).flatten(),
+                    &mut self.pending_rgba,
                     self.telemetry.wants_phases(),
                 )?;
                 record_phase(self.telemetry(), EncodePhase::Convert, convert_time);
                 record_phase(self.telemetry(), EncodePhase::Compare, compare_time);
             }
             reference => {
+                // The shadow settles a row with one memcmp when its RGBA still
+                // mirrors the reference: RGBA-equal implies cell-equal, so the
+                // row needs neither conversion nor comparison (see
+                // `shadow.rs`). A row the shadow cannot vouch for pays the full
+                // path, exactly as before the shadow existed.
+                let shadow = use_shadow.then_some(self.shadow.as_ref()).flatten();
                 let timed = self.telemetry.wants_phases();
+                let mut started = Instant::now();
                 let mut convert_time = Duration::ZERO;
                 let mut compare_time = Duration::ZERO;
                 let row_bytes = width * 4;
-                if timed {
-                    for y in 0..frame.height {
-                        let start = y as usize * row_bytes;
-                        let started = Instant::now();
+                for y in 0..frame.height {
+                    let start = y as usize * row_bytes;
+                    let mut needed = false;
+                    if let Some(shadow_row) = shadow
+                        .filter(|shadow| shadow.row_valid(y))
+                        .map(|s| s.row(y))
+                        && shadow_row == &frame.rgba[start..start + row_bytes]
+                    {
+                        // The shadow settled the row: no conversion, no
+                        // comparison, no clock.
+                    } else {
+                        if timed {
+                            started = Instant::now();
+                        }
                         convert_cells(
                             &frame.rgba[start..start + row_bytes],
                             &mut self.row_scratch[..width],
                         );
-                        convert_time += started.elapsed();
-                        let started = Instant::now();
-                        let needed = match reference {
+                        if timed {
+                            convert_time += started.elapsed();
+                            started = Instant::now();
+                        }
+                        needed = match reference {
                             Some(reference) => {
                                 change_map.compare_row(&self.row_scratch[..width], reference, y)
                             }
                             None => true,
                         };
-                        compare_time += started.elapsed();
-                        let word = y as usize / 64;
-                        let bit = 1_u64 << (y as usize % 64);
-                        if needed {
-                            workspace
-                                .row_mut(y)
-                                .copy_from_slice(&self.row_scratch[..width]);
-                            self.stale_rows[word] &= !bit;
-                        } else {
-                            self.stale_rows[word] |= bit;
+                        if timed {
+                            compare_time += started.elapsed();
                         }
                     }
-                } else {
-                    // No clock reads in the row loop: the same pass without the
-                    // two `Instant::now()` calls per row a phase histogram asks
-                    // for (a 1080p frame is 2 160 rows, so the reads add up).
-                    for y in 0..frame.height {
-                        let start = y as usize * row_bytes;
-                        convert_cells(
-                            &frame.rgba[start..start + row_bytes],
-                            &mut self.row_scratch[..width],
-                        );
-                        // `needed` is `true` when no usable base exists: the row
-                        // is part of a full repaint and must reach the workspace.
-                        let needed = match reference {
-                            Some(reference) => {
-                                change_map.compare_row(&self.row_scratch[..width], reference, y)
-                            }
-                            None => true,
-                        };
-                        let word = y as usize / 64;
-                        let bit = 1_u64 << (y as usize % 64);
-                        if needed {
-                            workspace
-                                .row_mut(y)
-                                .copy_from_slice(&self.row_scratch[..width]);
-                            self.stale_rows[word] &= !bit;
-                        } else {
-                            self.stale_rows[word] |= bit;
+                    let word = y as usize / 64;
+                    let bit = 1_u64 << (y as usize % 64);
+                    if needed {
+                        workspace
+                            .row_mut(y)
+                            .copy_from_slice(&self.row_scratch[..width]);
+                        if shadow.is_some() {
+                            self.pending_rgba
+                                .push_row(y, &frame.rgba[start..start + row_bytes]);
                         }
+                        self.stale_rows[word] &= !bit;
+                    } else {
+                        self.stale_rows[word] |= bit;
                     }
                 }
                 record_phase(self.telemetry(), EncodePhase::Convert, convert_time);
@@ -773,7 +876,11 @@ impl ScreenStreamEncoder {
     }
 
     /// Plan a reset frame starting at row `from_y`.
-    fn plan_reset(&mut self, from_y: u32) -> Result<Option<PlannedUpdate>, CodecError> {
+    fn plan_reset(
+        &mut self,
+        from_y: u32,
+        frame: &CapturedFrame,
+    ) -> Result<Option<PlannedUpdate>, CodecError> {
         let Some(workspace) = self.workspace.as_ref() else {
             return Ok(None);
         };
@@ -813,6 +920,19 @@ impl ScreenStreamEncoder {
 
         if bands.is_empty() {
             return Ok(None);
+        }
+        // A reset's bands are full rows: retain their RGBA so the commit can
+        // teach the shadow those rows (the only way a row earns shadow
+        // validity -- deltas extend it, resets establish it).
+        if frame.width == width {
+            let row_bytes = width as usize * 4;
+            for band in &bands {
+                for y in band.y..band.y + band.height {
+                    let start = y as usize * row_bytes;
+                    self.pending_rgba
+                        .push_row(y, &frame.rgba[start..start + row_bytes]);
+                }
+            }
         }
         let mut regions = Vec::with_capacity(bands.len());
         let mut writes = std::mem::take(&mut self.writes);
@@ -962,7 +1082,13 @@ impl ScreenStreamEncoder {
         // make such a row part of a rectangle, so those rows are converted here
         // (a no-op unless the final rectangle set reaches a row the fused pass
         // did not write).
-        repair_stale_rows(workspace, &mut self.stale_rows, frame, &self.rects);
+        repair_stale_rows(
+            workspace,
+            &mut self.stale_rows,
+            frame,
+            &self.rects,
+            Some(&mut self.pending_rgba),
+        );
 
         // Steps F–G — spans, op build, refresh budget.
         let pack_started = Instant::now();
@@ -1179,6 +1305,10 @@ const PARALLEL_CONVERT_MIN_CELLS: usize = 1 << 19;
 struct DetectWorker {
     map: ChangeMap,
     scratch: Vec<u16>,
+    /// This worker's retained RGBA rows for the plan in flight (see
+    /// `shadow.rs`); merged into the encoder's retention after the join.
+    pending: Vec<u8>,
+    pending_rows: Vec<(u32, usize)>,
 }
 
 /// The worker ceiling of the delta path: the configured value (`0` means the
@@ -1207,6 +1337,8 @@ fn convert_and_detect_parallel(
     change_map: &mut ChangeMap,
     stale_rows: &mut [u64],
     worker_state: &mut [DetectWorker],
+    shadow: Option<&RgbaShadow>,
+    pending: &mut PendingRgba,
     timed: bool,
 ) -> Result<(Duration, Duration), CodecError> {
     let width = frame.width as usize;
@@ -1238,41 +1370,56 @@ fn convert_and_detect_parallel(
             let rgba = &frame.rgba[row_start * row_bytes..(row_start + rows) * row_bytes];
             let reference = &*reference;
             handles.push(scope.spawn(move || {
-                let DetectWorker { map, scratch } = state;
+                let DetectWorker {
+                    map,
+                    scratch,
+                    pending,
+                    pending_rows,
+                } = state;
                 map.prepare_grid(frame_width, frame_height);
                 if scratch.len() < width {
                     scratch.resize(width, 0);
                 }
+                pending.clear();
+                pending_rows.clear();
                 let mut convert = Duration::ZERO;
                 let mut compare = Duration::ZERO;
                 for row in 0..rows {
                     let start = row * row_bytes;
+                    let absolute = (row_start + row) as u32;
+                    // The shadow settles the row before any conversion (see
+                    // `shadow.rs`): one memcmp against a row whose cells the
+                    // mirror already vouches for.
+                    if let Some(shadow) = shadow
+                        && shadow.row_valid(absolute)
+                        && shadow.row(absolute) == &rgba[start..start + row_bytes]
+                    {
+                        stale[row / 64] |= 1_u64 << (row % 64);
+                        continue;
+                    }
+                    let mut started = Instant::now();
                     if timed {
-                        let started = Instant::now();
-                        convert_cells(&rgba[start..start + row_bytes], scratch);
+                        started = Instant::now();
+                    }
+                    convert_cells(&rgba[start..start + row_bytes], scratch);
+                    if timed {
                         convert += started.elapsed();
-                        let started = Instant::now();
-                        let needed =
-                            map.compare_row(&scratch[..width], reference, (row_start + row) as u32);
+                        started = Instant::now();
+                    }
+                    let needed = map.compare_row(&scratch[..width], reference, absolute);
+                    if timed {
                         compare += started.elapsed();
-                        if needed {
-                            let offset = row * width;
-                            chunk[offset..offset + width].copy_from_slice(&scratch[..width]);
-                            stale[row / 64] &= !(1_u64 << (row % 64));
-                        } else {
-                            stale[row / 64] |= 1_u64 << (row % 64);
+                    }
+                    if needed {
+                        let offset = row * width;
+                        chunk[offset..offset + width].copy_from_slice(&scratch[..width]);
+                        if shadow.is_some() {
+                            pending_rows.push((absolute, pending.len()));
+                            pending.extend_from_slice(&rgba[start..start + row_bytes]);
                         }
+                        stale[row / 64] &= !(1_u64 << (row % 64));
                     } else {
-                        convert_cells(&rgba[start..start + row_bytes], scratch);
-                        let needed =
-                            map.compare_row(&scratch[..width], reference, (row_start + row) as u32);
-                        if needed {
-                            let offset = row * width;
-                            chunk[offset..offset + width].copy_from_slice(&scratch[..width]);
-                            stale[row / 64] &= !(1_u64 << (row % 64));
-                        } else {
-                            stale[row / 64] |= 1_u64 << (row % 64);
-                        }
+                        stale[row / 64] |= 1_u64 << (row % 64);
                     }
                 }
                 (convert, compare)
@@ -1298,8 +1445,22 @@ fn convert_and_detect_parallel(
     // Every worker state was re-armed for this frame's grid before the pass;
     // a worker whose band chunk did not exist holds an all-clean map, and
     // merging it adds nothing. The merge therefore runs over the whole pool.
-    for state in worker_state {
+    // The retained RGBA rows ride along: workers own disjoint band ranges, so
+    // the concatenation is already row-ascending.
+    let mut row_bytes = 0_usize;
+    for state in worker_state.iter_mut() {
         change_map.merge_from(&state.map);
+        if row_bytes == 0 && !state.pending_rows.is_empty() {
+            row_bytes = state.pending.len() / state.pending_rows.len();
+        }
+    }
+    if row_bytes > 0 {
+        for state in worker_state.iter() {
+            let source = &state.pending;
+            for (row, offset) in &state.pending_rows {
+                pending.push_row(*row, &source[*offset..*offset + row_bytes]);
+            }
+        }
     }
     Ok((convert_time, compare_time))
 }
@@ -1317,6 +1478,7 @@ fn repair_stale_rows(
     stale: &mut [u64],
     frame: &CapturedFrame,
     rects: &[Rect],
+    mut pending: Option<&mut PendingRgba>,
 ) {
     if stale.iter().all(|word| *word == 0) {
         return;
@@ -1332,6 +1494,12 @@ fn repair_stale_rows(
             let bit = 1_u64 << (index % 64);
             let start = index * row_bytes;
             convert_cells(&frame.rgba[start..start + row_bytes], workspace.row_mut(y));
+            // A repaired row is a row the final rectangles reached: its cells
+            // may be written this frame, so the shadow's retention wants its
+            // RGBA the same as the fused pass's rows.
+            if let Some(pending) = pending.as_deref_mut() {
+                pending.push_row(y, &frame.rgba[start..start + row_bytes]);
+            }
             stale[word] &= !bit;
         }
     }
@@ -1813,7 +1981,7 @@ mod tests {
         let mut expected = Surface::new(256, 256).unwrap();
         rgba_to_cells(&frame.rgba, 256, 256, &mut expected).unwrap();
 
-        repair_stale_rows(&mut workspace, &mut stale, &frame, &rects);
+        repair_stale_rows(&mut workspace, &mut stale, &frame, &rects, None);
 
         assert_eq!(workspace.row(64), expected.row(64), "stale row 64 repaired");
         assert_eq!(workspace.row(65), expected.row(65), "stale row 65 repaired");

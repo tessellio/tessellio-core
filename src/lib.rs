@@ -51,6 +51,7 @@ pub mod reference;
 pub mod reset;
 #[cfg(feature = "scenes")]
 pub mod scene;
+pub mod shadow;
 pub mod telemetry;
 
 #[cfg(feature = "cli")]
