@@ -27,7 +27,17 @@ metrics = []
 parallel = ["dep:rayon"]
 
 [dependencies]
-flate2 = "1"
+# zlib-ng: the DEFLATE envelope is the codec's dominant CPU cost on literal
+# frames, and the pure-Rust backend (miniz_oxide) is the slowest of the
+# interchangeable ones flate2 offers. The wire format is unchanged -- any
+# valid raw-DEFLATE stream decodes -- so the backend is a build-time
+# performance decision, and the conformance corpus regenerates with it.
+flate2 = { version = "1", default-features = false, features = ["zlib-ng"] }
+# The fast path of the codec's own Deflater (see ops.rs): the pure-Rust
+# backend's level-1 is the fastest known compressor for the high-entropy
+# op streams the deep backend's fast level handles poorly, and the wire
+# form (raw DEFLATE) is backend-independent.
+miniz_oxide = "0.9"
 rayon = { version = "1", optional = true }
 serde_json = { version = "1", optional = true }
 

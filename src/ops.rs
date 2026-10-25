@@ -71,6 +71,12 @@ impl Deflater {
     ///
     /// The stream is finished and flushed in one `FlushCompress::Finish` loop,
     /// exactly like [`deflate_ops`]; only the compressor object is reused.
+    ///
+    /// The fast level routes to the pure-Rust backend (see
+    /// [`FAST_DEFLATE_LEVEL`]): the two backends' fast paths are not the same
+    /// machine, and on high-entropy op streams the pure-Rust one is the
+    /// faster by ~2×. Both emit valid raw DEFLATE, so the decoder does not
+    /// care which one wrote the stream.
     pub fn deflate_into(
         &mut self,
         ops: &[u8],
@@ -78,6 +84,16 @@ impl Deflater {
         out: &mut Vec<u8>,
     ) -> Result<(), CodecError> {
         let level = level.min(9);
+        if level == 0 {
+            // Stored blocks are the wire format's documented hand-derived
+            // envelope (`01 LEN ~LEN ops`, §9.1): writing them directly is
+            // both the fastest possible level and the only backend-free one.
+            deflate_stored(ops, out);
+            return Ok(());
+        }
+        if level <= FAST_DEFLATE_LEVEL {
+            return deflate_raw_miniz(ops, out);
+        }
         if level != self.level {
             // `reset` keeps the level, so a level change needs a new compressor.
             self.compressor = Compress::new(Compression::new(u32::from(level)), false);
@@ -118,6 +134,64 @@ impl Deflater {
 
 /// Output staging buffer of one deflate pass (see [`Deflater::deflate_into`]).
 const DEFLATE_SCRATCH_BYTES: usize = 16 * 1024;
+
+/// The level at and below which the pure-Rust backend takes over (see
+/// [`Deflater::deflate_into`]).
+const FAST_DEFLATE_LEVEL: u8 = 1;
+
+/// Write `ops` as stored DEFLATE blocks (`01 LEN ~LEN ops` for the final
+/// block, `00 LEN ~LEN ops` for each 64 KiB chunk before it).
+fn deflate_stored(ops: &[u8], out: &mut Vec<u8>) {
+    out.clear();
+    let mut offset = 0_usize;
+    loop {
+        let chunk = (ops.len() - offset).min(u16::MAX as usize);
+        let last = offset + chunk == ops.len();
+        out.push(if last { 0x01 } else { 0x00 });
+        out.extend_from_slice(&(chunk as u16).to_le_bytes());
+        out.extend_from_slice(&(!(chunk as u16)).to_le_bytes());
+        out.extend_from_slice(&ops[offset..offset + chunk]);
+        offset += chunk;
+        if last {
+            return;
+        }
+    }
+}
+
+/// Compress `ops` into `out` as a raw-DEFLATE stream on the pure-Rust backend.
+///
+/// The compressor state is boxed: the level-1 tables are tens of kilobytes,
+/// and one box per fast-path region is nothing next to the megabytes it
+/// compresses.
+fn deflate_raw_miniz(ops: &[u8], out: &mut Vec<u8>) -> Result<(), CodecError> {
+    use miniz_oxide::deflate::core::{
+        CompressorOxide, TDEFLFlush, TDEFLStatus, compress, create_comp_flags_from_zip_params,
+    };
+    let flags = create_comp_flags_from_zip_params(i32::from(FAST_DEFLATE_LEVEL), -15, 0);
+    let mut compressor = Box::new(CompressorOxide::new(flags));
+    let mut scratch = [0_u8; DEFLATE_SCRATCH_BYTES];
+    out.clear();
+    let mut consumed = 0_usize;
+    loop {
+        let (status, in_read, out_written) = compress(
+            &mut compressor,
+            &ops[consumed..],
+            &mut scratch,
+            TDEFLFlush::Finish,
+        );
+        consumed += in_read;
+        out.extend_from_slice(&scratch[..out_written]);
+        match status {
+            TDEFLStatus::Done => return Ok(()),
+            TDEFLStatus::Okay => {}
+            other => {
+                return Err(CodecError::Encode(format!(
+                    "deflate (fast backend): {other:?}"
+                )));
+            }
+        }
+    }
+}
 
 /// Prefix the level probe compresses (see [`Deflater::deflate_level_for`]).
 ///

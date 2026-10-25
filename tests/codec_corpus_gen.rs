@@ -181,7 +181,10 @@ fn frame_json(
 fn scene_case(steps: Vec<CapturedFrame>, full_cells: bool) -> (Vec<Value>, usize) {
     let mut encoder = ScreenStreamEncoder::new(CodecConfig {
         delta_deflate_level: 6,
-        reset_deflate_level: 3,
+        // The levels the shipped encoder uses (see CodecConfig::default):
+        // the corpus mirrors the production paths, and the level probe
+        // inside the encoder decides the fast level per content.
+        reset_deflate_level: 6,
         encoder_threads: 2,
         // Every scripted step must produce a frame, including an unchanged one:
         // the idle case is a corpus case in its own right.

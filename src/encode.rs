@@ -63,7 +63,12 @@ impl Default for CodecConfig {
         Self {
             refresh_cells: DELTA_REFRESH_CELLS,
             delta_deflate_level: 6,
-            reset_deflate_level: 3,
+            // The level is stated against the build's DEFLATE backend: 6 on
+            // zlib-ng matches what 3 produced on the pure-Rust backend
+            // (82 699 vs 82 799 bytes on the 1080p office reset), and the
+            // band-level probe (ops.rs) still drops to the fast level on
+            // incompressible content.
+            reset_deflate_level: 6,
             encoder_threads: 0,
             idle_update_interval: Duration::from_millis(crate::format::IDLE_UPDATE_INTERVAL_MS),
         }
