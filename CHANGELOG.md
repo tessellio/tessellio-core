@@ -9,6 +9,18 @@
 - 16+ usage examples in `examples/`.
 
 ### Changed
+- Hybrid DEFLATE backend: the deep levels ride zlib-ng (flate2 feature
+  swap), the fast level rides `miniz_oxide`'s raw stream (the fast path
+  the pure-Rust backend is the faster machine on), and level 0 writes
+  its stored blocks by hand. The reset default level is 6 (what 3
+  produced on the old backend, byte for byte on the office reset); the
+  conformance corpus regenerated with it.
+- **RGBA shadow**: per-row RGBA mirror of the reference; a row the mirror
+  vouches for and the capture matches byte-for-byte needs neither
+  conversion nor comparison. Validity is earned (reset bands establish
+  rows, deltas extend them column-wise, a rebase withdraws everything);
+  output is byte-identical with and without it (corpus regenerates
+  bit-for-bit). New module `shadow`.
 - Performance, encode hot path (bytes on the wire are unchanged):
   - fat-LTO release profile (`lto = "fat"`, `codegen-units = 1`);
   - the op-stream self-check walk is a debug/test build check — an
